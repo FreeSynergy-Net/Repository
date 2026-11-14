@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Download the .deb files of the newest releases of the given FreeSynergy repos, keep only those whose detached signature
+# (<file>.deb.asc, made by the project key) verifies, and write them to OUTDIR (flat). Release = stable, pre-release = testing; drafts never.
+# Usage: fetch-releases.sh [--keep N] SUITE OUTDIR PUBLIC_KEY.asc PRIMARY_FPR REPO...      (needs gh, jq, gpg, gpgv; GH_TOKEN for gh)
+# Source of truth stays the release; this repository only holds a derived view (ADR 0068).
+set -euo pipefail
+keep=3
+if [[ ${1:-} == --keep ]]; then keep=${2:?}; shift 2; fi
+suite=${1:?usage: fetch-releases.sh [--keep N] SUITE OUTDIR KEY FPR REPO...}
+out=${2:?}; key=${3:?}; want=${4:?}; shift 4
+case $suite in stable) pre=false ;; testing) pre=true ;; *) echo "error: suite" >&2; exit 2 ;; esac
+want=${want^^}; want=${want// /}
+mkdir -p "$out"
+tmp=$(mktemp -d); trap 'gpgconf --homedir "$tmp/gh" --kill gpg-agent >/dev/null 2>&1 || true; rm -rf "$tmp"' EXIT
+mkdir -m 700 "$tmp/gh"
+gpg --homedir "$tmp/gh" --batch -q --dearmor --output "$tmp/kr.pgp" < "$key"
+for repo in "$@"; do
+  mapfile -t tags < <(gh release list -R "FreeSynergy/$repo" --limit 50 --json tagName,isPrerelease,isDraft \
+    --jq ".[] | select(.isDraft==false and .isPrerelease==$pre) | .tagName" | head -n "$keep")
+  for tag in "${tags[@]}"; do
+    d=$tmp/$repo/$tag; mkdir -p "$d"
+    gh release download "$tag" -R "FreeSynergy/$repo" -p '*.deb' -p '*.deb.asc' -D "$d" || { echo "note: $repo $tag has no .deb"; continue; }
+    for f in "$d"/*.deb; do
+      [[ -f $f ]] || continue
+      st=$(gpgv --homedir "$tmp/gh" --keyring "$tmp/kr.pgp" --status-fd=1 "$f.asc" "$f" 2> /dev/null || true)
+      if grep -q '^\[GNUPG:\] GOODSIG ' <<< "$st" && [[ $(awk '$2=="VALIDSIG" {print toupper($12)}' <<< "$st" | sort -u) == "$want" ]]; then
+        cp "$f" "$out/"; echo "taken: $repo $tag $(basename "$f")"
+      else
+        echo "::warning::$repo $tag $(basename "$f"): signature missing or not by the project key - NOT taken"
+      fi
+    done
+  done
+done

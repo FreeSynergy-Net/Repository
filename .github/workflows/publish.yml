@@ -1,0 +1,122 @@
+# DRAFT - never run yet. A person triggers it (workflow_dispatch) after the strategy decision to publish; nothing runs on push.
+# Three jobs: build (no secrets) -> sign (environment apt-signing, secrets only there, no foreign code) -> deploy (Pages).
+# The site is rebuilt completely from the signed releases (stateless; the releases stay the source of truth). Both suites are rebuilt,
+# because a Pages deploy replaces the whole site.
+# Pins: all actions by commit SHA. Three values are still REPLACE_SHA on purpose and must be entered after review (check each against its tag with gh api first):
+#   fs-release sign-apt      = the commit of the merged fs-release 0.0.7 (5b0757969226212c1e4add9a2c00fcc56443f6bf is the unreviewed head; use it only after the 0.0.7 merge)
+#   upload-pages-artifact    = v5.0.0 fc324d3547104276b827a68afc52ff2a11cc49c9 (checked against the tag 2026-11-14)
+#   deploy-pages             = v5.0.1 368f82528645a54fb793d4d04e342629a3f51346 (checked against the tag 2026-11-14)
+# Repository setting to switch on: "Require actions to be pinned to a full-length commit SHA".
+name: publish
+on:
+  workflow_dispatch:
+    inputs:
+      repos:
+        description: "Space separated FreeSynergy repos whose releases carry .deb files (names fs-<category>)"
+        default: "fs-zentinel fs-kanidm"
+      key_ref:
+        description: "Commit SHA of fs-release from which release-signing-key.asc is read (reviewed commit, not a branch)"
+        required: true
+      deploy:
+        description: "Deploy to GitHub Pages (draft step, off by default: only build and sign, upload the site as an artifact)"
+        type: boolean
+        default: false
+permissions:
+  contents: read
+env:
+  KEY_FPR: "16A4A3EE563AEF51FCF0C55DED7B57C4A1904342"
+  BASE_URL: "https://freesynergy.github.io/fs-packages/apt/"
+  KEY_REF: ${{ inputs.key_ref }}
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends apt-utils gnupg gpgv xz-utils
+      - name: Public project key (from fs-release at the given commit; the fingerprint is pinned above)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ $KEY_REF =~ ^[0-9a-f]{40}$ ]] || { echo "::error::key_ref must be a full commit SHA"; exit 1; }
+          gh api "repos/FreeSynergy/fs-release/contents/release-signing-key.asc?ref=$KEY_REF" --jq .content | base64 -d > "$RUNNER_TEMP/key.asc"
+      - name: Fetch signed .deb files (3 newest releases per repo and suite) and build the unsigned trees (all architectures)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOS: ${{ inputs.repos }}
+        run: |
+          set -euo pipefail
+          read -r -a repos <<< "$REPOS"
+          for r in "${repos[@]}"; do [[ $r =~ ^fs-[a-z0-9-]+$ ]] || { echo "::error::bad repo name: $r"; exit 1; }; done
+          for suite in stable testing; do
+            scripts/fetch-releases.sh "$suite" "debs-$suite" "$RUNNER_TEMP/key.asc" "$KEY_FPR" "${repos[@]}"
+            if compgen -G "debs-$suite/*.deb" > /dev/null; then scripts/build-apt.sh --arch amd64,arm64 "debs-$suite" "$suite" repo; else echo "no .deb for $suite"; fi
+          done
+          test -d repo/dists || { echo "::error::nothing to publish"; exit 1; }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: apt-unsigned
+          path: repo
+          retention-days: 3
+  sign:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # Secrets GPG_PRIVATE_KEY (ONLY the signing subkey: gpg --export-secret-subkeys) and GPG_PASSPHRASE live in this environment only
+    # (Settings > Environments > apt-signing: deployment branch rule main, required reviewer = owner). sign-apt fails without the key.
+    environment: apt-signing
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: apt-unsigned
+          path: repo
+      - name: Sign every suite (InRelease + Release.gpg; fs-release action, key only in a temporary GNUPGHOME)
+        uses: FreeSynergy/fs-release/actions/sign-apt@REPLACE_SHA # fs-release 0.0.7 commit (see header)
+        with:
+          directory: repo
+          private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+      - name: Verify against the public key (nothing secret is printed), assemble the site
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ $KEY_REF =~ ^[0-9a-f]{40}$ ]] || { echo "::error::key_ref must be a full commit SHA"; exit 1; }
+          gh api "repos/FreeSynergy/fs-release/contents/release-signing-key.asc?ref=$KEY_REF" --jq .content | base64 -d > "$RUNNER_TEMP/key.asc"
+          for d in repo/dists/*/; do scripts/verify-apt.sh --fingerprint "$KEY_FPR" repo "$(basename "$d")" "$RUNNER_TEMP/key.asc"; done
+          scripts/make-site.sh repo site "$RUNNER_TEMP/key.asc" "$BASE_URL" "$KEY_FPR"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: apt-site
+          path: site
+          retention-days: 3
+      - if: ${{ inputs.deploy }}
+        uses: actions/upload-pages-artifact@REPLACE_SHA # v5.0.0 (see header)
+        with:
+          path: site
+  deploy:
+    # DRAFT: Pages deploy, not executed. Needs Settings > Pages > Source = GitHub Actions (owner decision).
+    needs: sign
+    if: ${{ inputs.deploy }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@REPLACE_SHA # v5.0.1 (see header)

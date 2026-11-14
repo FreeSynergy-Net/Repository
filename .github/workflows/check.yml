@@ -1,0 +1,25 @@
+# Self-test + shellcheck. No secrets: the test uses throwaway keys it generates itself.
+name: check
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Tools (apt-ftparchive from apt-utils, shellcheck)
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends apt-utils shellcheck gnupg gpgv xz-utils
+      - name: Shellcheck
+        run: shellcheck scripts/*.sh
+      - name: Self-test (retention, build, sign, verify, counter-checks)
+        run: |
+          set -euo pipefail
+          out=$(scripts/test_apt.sh)
+          echo "$out"
+          if grep -q '^SKIPPED' <<< "$out"; then echo "::error::a test part was skipped in CI"; exit 1; fi
