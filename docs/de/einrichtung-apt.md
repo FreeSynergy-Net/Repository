@@ -5,7 +5,7 @@ Als root. Den Schlüssel laden, **die Fingerabdrücke selbst prüfen**, erst dan
 ```sh
 install -d -m 0755 /etc/apt/keyrings
 tmp=$(mktemp -d)
-curl -fsSL https://freesynergy.github.io/fs-packages/apt/freesynergy-archive-keyring.asc -o "$tmp/key.asc"
+curl -fsSL https://freesynergy.github.io/Repository/apt/freesynergy-archive-keyring.asc -o "$tmp/key.asc"
 gpg --show-keys --with-fingerprint --with-subkey-fingerprints "$tmp/key.asc"
 ```
 
@@ -14,13 +14,13 @@ Der Fingerabdruck des Hauptschlüssels muss genau `16A4 A3EE 563A EF51 FCF0 C55D
 
 ```sh
 gpg --dearmor < "$tmp/key.asc" > /etc/apt/keyrings/freesynergy-archive-keyring.pgp
-curl -fsSL https://freesynergy.github.io/fs-packages/apt/freesynergy.sources -o /etc/apt/sources.list.d/freesynergy.sources
+curl -fsSL https://freesynergy.github.io/Repository/apt/freesynergy.sources -o /etc/apt/sources.list.d/freesynergy.sources
 rm -rf "$tmp"
 apt update
 apt install zentinel        # oder kanidmd
 ```
 
-Die Datei `freesynergy.sources` enthält `Types: deb`, `URIs: https://freesynergy.github.io/fs-packages/apt/`, `Suites: stable`, `Components: main` und
+Die Datei `freesynergy.sources` enthält `Types: deb`, `URIs: https://freesynergy.github.io/Repository/apt/`, `Suites: stable`, `Components: main` und
 `Signed-By: /etc/apt/keyrings/freesynergy-archive-keyring.pgp`.
 
 **Suiten:** `stable` = volle Releases, `testing` = Vorab-Releases. Solange ein Programm nur Vorab-Releases hat (z. B. Zentinel vor dem ersten vollen

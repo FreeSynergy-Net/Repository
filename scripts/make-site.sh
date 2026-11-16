@@ -5,7 +5,7 @@
 #   SITE/apt/freesynergy.sources     ready-made deb822 file for BASE_URL
 #   SITE/index.html                  fingerprint and 4 setup lines
 # The key file is NOT published as is: it must contain exactly ONE primary key and that must be PRIMARY_FPR; only that key is exported.
-# Usage: make-site.sh REPO SITE PUBLIC_KEY.asc BASE_URL PRIMARY_FPR     (BASE_URL e.g. https://freesynergy.github.io/fs-packages/apt/)
+# Usage: make-site.sh REPO SITE PUBLIC_KEY.asc BASE_URL PRIMARY_FPR     (BASE_URL e.g. https://freesynergy.github.io/Repository/apt/)
 set -euo pipefail
 repo=${1:?usage: make-site.sh REPO SITE KEY.asc BASE_URL PRIMARY_FPR}; site=${2:?}; key=${3:?}; base=${4:?}; want=${5:?}
 want=${want^^}; want=${want// /}
@@ -35,6 +35,6 @@ cat > "$site/index.html" <<HTML
 <!doctype html><meta charset="utf-8"><title>FreeSynergy packages</title>
 <h1>FreeSynergy APT repository</h1>
 <p>Primary key fingerprint (check it against the project website and the ADR before you trust the key): <code>$fpr</code></p>
-<p>Setup: see docs/en/setup-apt.md (docs/de/einrichtung-apt.md) in the fs-packages repository. Key: <a href="apt/freesynergy-archive-keyring.asc">asc</a>, <a href="apt/freesynergy-archive-keyring.pgp">pgp</a>; source file: <a href="apt/freesynergy.sources">freesynergy.sources</a>.</p>
+<p>Setup: see docs/en/setup-apt.md (docs/de/einrichtung-apt.md) in the Repository repository. Key: <a href="apt/freesynergy-archive-keyring.asc">asc</a>, <a href="apt/freesynergy-archive-keyring.pgp">pgp</a>; source file: <a href="apt/freesynergy.sources">freesynergy.sources</a>.</p>
 HTML
 echo "site assembled in $site (key $fpr)"

@@ -1,6 +1,6 @@
-# fs-packages (English)
+# Repository (English)
 
-## Layout (GitHub Pages first, `https://freesynergy.github.io/fs-packages/`)
+## Layout (GitHub Pages first, `https://freesynergy.github.io/Repository/`)
 
 ```
 index.html                                  fingerprint + links

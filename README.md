@@ -1,4 +1,4 @@
-# fs-packages
+# Repository
 
 Signed package repositories of FreeSynergy (APT now, RPM later: `apt/`, `rpm/`). The releases of the program repositories stay the source of
 truth (`.deb` + detached `.asc`); this repository only builds a derived, signed view of them. Nothing here is published by itself.

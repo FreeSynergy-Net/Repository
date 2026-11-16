@@ -1,9 +1,9 @@
-# fs-packages (Deutsch)
+# Repository (Deutsch)
 
 Signierte Paketquellen von FreeSynergy (jetzt APT, später RPM). Die Releases der Programm-Repos bleiben die Quelle der Wahrheit (`.deb` + `.asc`);
 dieses Repo baut daraus nur eine abgeleitete, signierte Sicht. Nichts wird hier von selbst veröffentlicht.
 
-## Aufbau (zuerst GitHub Pages, `https://freesynergy.github.io/fs-packages/`)
+## Aufbau (zuerst GitHub Pages, `https://freesynergy.github.io/Repository/`)
 
 ```
 index.html                                  Fingerabdruck + Links

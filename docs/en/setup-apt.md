@@ -5,7 +5,7 @@ As root. The key is fetched, **its fingerprints are checked by you**, and only t
 ```sh
 install -d -m 0755 /etc/apt/keyrings
 tmp=$(mktemp -d)
-curl -fsSL https://freesynergy.github.io/fs-packages/apt/freesynergy-archive-keyring.asc -o "$tmp/key.asc"
+curl -fsSL https://freesynergy.github.io/Repository/apt/freesynergy-archive-keyring.asc -o "$tmp/key.asc"
 gpg --show-keys --with-fingerprint --with-subkey-fingerprints "$tmp/key.asc"
 ```
 
@@ -14,7 +14,7 @@ The primary key fingerprint must be exactly `16A4 A3EE 563A EF51 FCF0 C55D ED7B 
 
 ```sh
 gpg --dearmor < "$tmp/key.asc" > /etc/apt/keyrings/freesynergy-archive-keyring.pgp
-curl -fsSL https://freesynergy.github.io/fs-packages/apt/freesynergy.sources -o /etc/apt/sources.list.d/freesynergy.sources
+curl -fsSL https://freesynergy.github.io/Repository/apt/freesynergy.sources -o /etc/apt/sources.list.d/freesynergy.sources
 rm -rf "$tmp"
 apt update
 apt install zentinel        # or kanidmd
@@ -24,7 +24,7 @@ apt install zentinel        # or kanidmd
 
 ```
 Types: deb
-URIs: https://freesynergy.github.io/fs-packages/apt/
+URIs: https://freesynergy.github.io/Repository/apt/
 Suites: stable
 Components: main
 Signed-By: /etc/apt/keyrings/freesynergy-archive-keyring.pgp
