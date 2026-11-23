@@ -1,0 +1,180 @@
+# DRAFT - never run. A person triggers it (workflow_dispatch); nothing runs on push, schedule or tag.
+# Test build of ONE FreeSynergy repo at a branch or main, WITHOUT a tag: signed rpm files for the dnf channel `nightly` (off by default at the user:
+# /etc/yum.repos.d/freesynergy.repo, [freesynergy-nightly] enabled=0). Version <next>~nightly.<UTC stamp>.g<sha7> (scripts/nightly-version.sh).
+# Three jobs: build (no secrets) -> sign (environment apt-signing, the existing secrets GPG_PRIVATE_KEY / GPG_PASSPHRASE, nothing new) -> upload (no secrets, only contents: write).
+# Only CI-built files go in: nothing built locally is ever uploaded. The files land on the rolling pre-release `nightly` of THIS repository (3 versions per package and
+# architecture, scripts/nightly-retain.sh); the next run of publish.yml (also by a person) puts them into rpm/nightly of the dnf repository.
+# Signing: fs-release action sign-files (the one the releases use): rpmsign header signature + detached .asc by the project key; here no key = failure (the action alone would only warn).
+# Pins: all actions by commit SHA; the fs-release actions at 15935ed (the SHA the caller repos use for their releases).
+name: nightly
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: "FreeSynergy-Net repository to build (name fs-<name>), e.g. fs-starter"
+        required: true
+      ref:
+        description: "Branch or main of that repository (a branch name, no tag; the commit is what counts)"
+        default: main
+      package:
+        description: "Cargo package that carries the binary (-p), e.g. fs-starter-host; empty = the only/first package"
+        default: ""
+      bins:
+        description: "Only if the source has no [package.metadata.generate-rpm]: comma list of binaries for /usr/bin (as the release pipeline does)"
+        default: ""
+      key_ref:
+        description: "Commit SHA of fs-release from which release-signing-key.asc is read (reviewed commit, not a branch)"
+        required: true
+permissions:
+  contents: read
+env:
+  KEY_FPR: "16A4A3EE563AEF51FCF0C55DED7B57C4A1904342"
+  FSR: "FreeSynergy-Net/fs-release"
+  FSR_SHA: "15935ed0d847d522fcb43d93e340ad1b14809639"
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+jobs:
+  build:
+    name: build ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-24.04, triple: x86_64-unknown-linux-gnu }
+          - { arch: aarch64, runner: ubuntu-24.04-arm, triple: aarch64-unknown-linux-gnu }
+    steps:
+      - name: Check the inputs (they only travel through env, never into a script text)
+        env:
+          REPO: ${{ inputs.repo }}
+          REF: ${{ inputs.ref }}
+          PKG: ${{ inputs.package }}
+          BINS: ${{ inputs.bins }}
+        run: |
+          set -euo pipefail
+          [[ $REPO =~ ^fs-[a-z0-9-]+$ ]] || { echo "::error::bad repo name"; exit 1; }
+          [[ $REF =~ ^[A-Za-z0-9._/-]+$ && $REF != *..* && $REF != refs/tags/* ]] || { echo "::error::ref must be a branch name"; exit 1; }
+          [[ -z $PKG || $PKG =~ ^[a-z0-9_-]+$ ]] || { echo "::error::bad package"; exit 1; }
+          [[ -z $BINS || $BINS =~ ^[a-z0-9_,-]+$ ]] || { echo "::error::bad bins"; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: FreeSynergy-Net/${{ inputs.repo }}
+          ref: ${{ inputs.ref }}
+          path: src
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: FreeSynergy-Net/fs-release/actions/setup-rust@15935ed0d847d522fcb43d93e340ad1b14809639
+        with:
+          toolchain: pinned
+          targets: ${{ matrix.triple }}
+          working-directory: src
+          cache-key: nightly-${{ matrix.arch }}
+      - uses: FreeSynergy-Net/fs-release/actions/install-tools@15935ed0d847d522fcb43d93e340ad1b14809639
+        with:
+          tools: cargo-generate-rpm@0.21.1
+      - name: Version, build, rpm (the binary comes from this job only)
+        working-directory: src
+        env:
+          PKG: ${{ inputs.package }}
+          BINS: ${{ inputs.bins }}
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          set -euo pipefail
+          sel=(); [[ -z $PKG ]] || sel=(-p "$PKG")
+          meta=$(cargo metadata --format-version 1 --no-deps | jq -r --arg p "$PKG" '[.packages[] | select($p == "" or .name == $p)][0] | .manifest_path + "\t" + .version')
+          manifest=${meta%%$'\t'*}; ver=${meta#*$'\t'}; dir=$(dirname "$manifest"); dir=${dir#"$PWD"}; dir=${dir#/}; dir=${dir:-.}
+          rel=no; git rev-parse -q --verify "refs/tags/v$ver" > /dev/null && rel=yes
+          v=$("$GITHUB_WORKSPACE/scripts/nightly-version.sh" "$ver" "$rel" "$(date -u +%Y%m%d%H%M%S)" "$(git rev-parse --short=7 HEAD)")
+          echo "rpm version $v (source $ver, released=$rel)"
+          cargo build --release --locked --target "$TRIPLE" "${sel[@]}"
+          if ! grep -q 'package.metadata.generate-rpm' "$manifest"; then
+            [[ -n $BINS ]] || { echo "::error::no [package.metadata.generate-rpm] in the source and no bins input"; exit 1; }
+            a=""; for b in ${BINS//,/ }; do a+="{ source = \"target/$TRIPLE/release/$b\", dest = \"/usr/bin/$b\", mode = \"755\" }, "; done
+            printf '\n[package.metadata.generate-rpm]\nassets = [%s]\n' "${a%, }" >> "$manifest"   # this CI checkout only, never committed
+          fi
+          mkdir -p ../dist; cargo generate-rpm --target "$TRIPLE" -p "$dir" -s "version = \"$v\"" --output ../dist/
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nightly-${{ matrix.arch }}
+          path: dist/*.rpm
+          if-no-files-found: error
+          retention-days: 3
+  sign:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # Same environment and the same two secrets as publish.yml (only the signing subkey; deployment rule and reviewer are set by the owner). Nothing new is created.
+    environment: apt-signing
+    permissions:
+      contents: read
+    steps:
+      - name: The key must be there (sign-files alone would only warn and leave the files unsigned)
+        env:
+          K: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: test -n "$K" || { echo "::error::GPG_PRIVATE_KEY is empty - refusing to continue unsigned"; exit 1; }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: nightly-*
+          merge-multiple: true
+          path: dist
+      - uses: FreeSynergy-Net/fs-release/actions/sign-files@15935ed0d847d522fcb43d93e340ad1b14809639
+        with:
+          mode: packages
+          directory: dist
+          private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+      - uses: FreeSynergy-Net/fs-release/actions/sign-files@15935ed0d847d522fcb43d93e340ad1b14809639
+        with:
+          mode: detached
+          directory: dist
+          private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+      - name: Verify against the public key at key_ref and the pinned fingerprint (rpm header and detached file)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEY_REF: ${{ inputs.key_ref }}
+        run: |
+          set -euo pipefail
+          [[ $KEY_REF =~ ^[0-9a-f]{40}$ ]] || { echo "::error::key_ref must be a full commit SHA"; exit 1; }
+          sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends rpm gnupg gpgv
+          gh api "repos/$FSR/contents/release-signing-key.asc?ref=$KEY_REF" --jq .content | base64 -d > "$RUNNER_TEMP/key.asc"
+          export GNUPGHOME=$RUNNER_TEMP/v; mkdir -m700 "$GNUPGHOME"; gpg --batch -q --import "$RUNNER_TEMP/key.asc"
+          [[ $(gpg --batch --with-colons --list-keys | awk -F: '/^fpr:/ {print $10; exit}') == "$KEY_FPR" ]] || { echo "::error::key at key_ref is not the pinned one"; exit 1; }
+          rpm --import "$RUNNER_TEMP/key.asc"
+          for f in dist/*.rpm; do rpm -K "$f" | grep -q 'digests signatures OK' || { echo "::error::rpm signature check failed: $f"; exit 1; }; gpg --batch --verify "$f.asc" "$f"; done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nightly-signed
+          path: |
+            dist/*.rpm
+            dist/*.rpm.asc
+          retention-days: 3
+  upload:
+    needs: sign
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: nightly-signed
+          path: dist
+      - name: Rolling pre-release `nightly` of this repository; keep 3 versions per package and architecture
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh release view nightly > /dev/null 2>&1 || gh release create nightly --prerelease --target "$GITHUB_SHA" --title "nightly" \
+            --notes "Rolling test builds (rpm, not for production). Built by nightly.yml; the dnf channel nightly is off by default."
+          gh release upload nightly dist/*.rpm dist/*.rpm.asc --clobber
+          scripts/nightly-retain.sh nightly 3
