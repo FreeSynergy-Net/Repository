@@ -75,6 +75,7 @@ prune
 [[ $index == 1 ]] || exit 0
 
 command -v apt-ftparchive >/dev/null || { echo "error: apt-ftparchive missing (package apt-utils)" >&2; exit 3; }
+# shellcheck disable=SC2015
 [[ -d $pool ]] && [[ -n $(find "$pool" -name '*.deb' -print -quit) ]] || { echo "error: no .deb in pool/$suite" >&2; exit 1; }
 cd "$out"
 dist=dists/$suite
