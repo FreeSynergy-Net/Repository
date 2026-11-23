@@ -22,4 +22,12 @@ mutant "curl | sudo bash inside the key job" sed '/^      - name: Tools from the
 # a third workflow with apt-signing (mistake) must be refused; check.yml itself must pass
 mkdir "$w/wf" && cp "$wf"/*.yml "$w/wf/" && printf 'name: x\njobs:\n  j:\n    environment: apt-signing\n    runs-on: ubuntu-24.04\n' > "$w/wf/third.yml"
 "$c" "$w/wf/publish.yml" rpm-index-gate > /dev/null 2>&1 && bad "mutant accepted: third workflow with apt-signing" || ok "mutant refused: third workflow with apt-signing"
+third() { # NAME FILENAME CONTENT: a third workflow that must be refused
+  rm -f "$w/wf/third.yml" "$w/wf/third.yaml"; printf '%b' "$3" > "$w/wf/$2"
+  "$c" "$w/wf/publish.yml" rpm-index-gate > /dev/null 2>&1 && bad "mutant accepted: $1" || ok "mutant refused: $1"
+}
+third "third workflow with secrets.GPG_ (was: dead branch, false green)" third.yml 'name: x\njobs:\n  j:\n    runs-on: ubuntu-24.04\n    env:\n      K: ${{ secrets.GPG_PRIVATE_KEY }}\n'
+third "third workflow with environment in object form" third.yml 'name: x\njobs:\n  j:\n    environment:\n      name: apt-signing\n    runs-on: ubuntu-24.04\n'
+third "third workflow as *.yaml" third.yaml 'name: x\njobs:\n  j:\n    environment: apt-signing\n    runs-on: ubuntu-24.04\n'
+third "third workflow with secrets.GPG_ inside run" third.yml 'name: x\njobs:\n  j:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: echo ${{ secrets.GPG_PASSPHRASE }}\n'
 exit "$fail"
