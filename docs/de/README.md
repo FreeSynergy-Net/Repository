@@ -50,6 +50,8 @@ Standardmäßig hat `Release` kein `Valid-Until`, das Repo läuft für Clients n
 ## rpm-Kanal
 
 `freesynergy-release` (gebaut mit `fs-blueprint package release --pages-url https://freesynergy-net.github.io/Repository`) zeigt dnf auf `<pages>/rpm/stable` (aktiv) und `<pages>/rpm/nightly` (aus), mit `gpgcheck=1` und `repo_gpgcheck=1`.
+
+Erstinstallation immer in dieser Reihenfolge: `<pages>/rpm/RPM-GPG-KEY-freesynergy` holen, Fingerabdruck vergleichen (`16A4 A3EE 563A EF51 FCF0 C55D ED7B 57C4 A190 4342`), `rpm --import`, dann `dnf install --setopt=localpkg_gpgcheck=1 <pages>/rpm/freesynergy-release.noarch.rpm` (Fedora prüft die Signatur lokaler/URL-Pakete sonst nicht, ein fehlender Schlüsselimport fiele nicht auf). Die Version von `freesynergy-release` folgt der fs-blueprint-Version; bei Schlüssel- oder URL-Wechsel MUSS `--pkg-version` im Job `release-pkg` von `publish.yml` erhöht werden.
 Die Reihenfolge ist wichtig, weil das Signieren eines Pakets dessen Prüfsumme ändert: `fetch-releases.sh` (`FETCH_EXT=rpm`) -> `sign-rpm.sh ... packages DIR` (rpmsign, Schlüssel-Job) ->
 `build-rpm.sh RPMDIR stable|nightly OUTDIR` (repodata mit `createrepo_rs` 0.1.9, GPL-2.0, nur CI, nie ausgeliefert; Rückfall `CREATEREPO=createrepo_c`) -> `sign-rpm.sh ... repo rpm/<kanal>` (`repomd.xml.asc`).
 `gate-createrepo.sh` vergleicht createrepo_rs mit createrepo_c an denselben RPMs und nennt das zu nutzende Werkzeug.

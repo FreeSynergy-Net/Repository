@@ -6,6 +6,7 @@
 #   fs-release sign-apt      = the commit of the merged fs-release 0.0.7 (5b0757969226212c1e4add9a2c00fcc56443f6bf is the unreviewed head; use it only after the 0.0.7 merge)
 # rpm channel (rpm/stable = releases, rpm/nightly = pre-releases): build -> rpm-packages (key) -> rpm-index (no key, createrepo_rs gated against createrepo_c) -> rpm-sign (key) -> site.
 # freesynergy-release: job release-pkg builds it (no secrets, fs-blueprint at BLUEPRINT_SHA), rpm-packages signs it, rpm-sign checks it and puts it at rpm/freesynergy-release.noarch.rpm (also in rpm/stable).
+# Version of freesynergy-release = fs-blueprint version; when the key or the Pages URL changes, --pkg-version MUST be raised in job release-pkg.
 # It uses the same environment apt-signing and the same two secrets; nothing new is created. The rpm steps below use the key only through scripts/sign-rpm.sh.
 #   upload-pages-artifact    = v5.0.0 fc324d3547104276b827a68afc52ff2a11cc49c9 (checked against the tag 2026-11-14)
 #   deploy-pages             = v5.0.1 368f82528645a54fb793d4d04e342629a3f51346 (checked against the tag 2026-11-14)
@@ -31,7 +32,7 @@ env:
   BASE_URL: "https://freesynergy-net.github.io/Repository/apt/"
   KEY_REF: ${{ inputs.key_ref }}
   PAGES_URL: "https://freesynergy-net.github.io/Repository"
-  # fs-blueprint source: fs-release unreviewed/package-rpm head (not yet on main): replace by the merge commit after the review.
+  # fs-blueprint source (ONE line to change: BLUEPRINT_SHA below): only a commit that is on main of fs-release may be pinned; 152afc1 is a development stand, replace it by the main commit once package-rpm has landed.
   BLUEPRINT_SHA: "152afc136391ad85e304478a911b89677359221c"
 jobs:
   build:
