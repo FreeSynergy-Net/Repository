@@ -5,6 +5,7 @@
 # Pins: all actions by commit SHA. Three values are still REPLACE_SHA on purpose and must be entered after review (check each against its tag with gh api first):
 #   fs-release sign-apt      = the commit of the merged fs-release 0.0.7 (5b0757969226212c1e4add9a2c00fcc56443f6bf is the unreviewed head; use it only after the 0.0.7 merge)
 # rpm channel (rpm/stable = releases, rpm/nightly = pre-releases): build -> rpm-packages (key) -> rpm-index (no key, createrepo_rs gated against createrepo_c) -> rpm-sign (key) -> site.
+# freesynergy-release: job release-pkg builds it (no secrets, fs-blueprint at BLUEPRINT_SHA), rpm-packages signs it, rpm-sign checks it and puts it at rpm/freesynergy-release.noarch.rpm (also in rpm/stable).
 # It uses the same environment apt-signing and the same two secrets; nothing new is created. The rpm steps below use the key only through scripts/sign-rpm.sh.
 #   upload-pages-artifact    = v5.0.0 fc324d3547104276b827a68afc52ff2a11cc49c9 (checked against the tag 2026-11-14)
 #   deploy-pages             = v5.0.1 368f82528645a54fb793d4d04e342629a3f51346 (checked against the tag 2026-11-14)
@@ -29,6 +30,9 @@ env:
   KEY_FPR: "16A4A3EE563AEF51FCF0C55DED7B57C4A1904342"
   BASE_URL: "https://freesynergy-net.github.io/Repository/apt/"
   KEY_REF: ${{ inputs.key_ref }}
+  PAGES_URL: "https://freesynergy-net.github.io/Repository"
+  # fs-blueprint source: fs-release unreviewed/package-rpm head (not yet on main): replace by the merge commit after the review.
+  BLUEPRINT_SHA: "152afc136391ad85e304478a911b89677359221c"
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -69,6 +73,7 @@ jobs:
           for pair in stable:stable nightly:testing; do
             scripts/fetch-releases.sh "${pair#*:}" "rpms/${pair%%:*}" "$RUNNER_TEMP/key.asc" "$KEY_FPR" "${repos[@]}"
           done
+          echo "stable nightly" > rpms/CHANNELS   # marker: rpm-src always exists, also when no repo has a .rpm (the apt part must not fail for that)
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: apt-unsigned
@@ -80,8 +85,41 @@ jobs:
           path: rpms
           retention-days: 3
           if-no-files-found: ignore
+  release-pkg:
+    # freesynergy-release (dnf source + public key), built here from the pinned fs-blueprint; NO secrets. Signed later in rpm-packages (after this job).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends gnupg
+      - name: Public key (primary key only, fingerprint pinned; a secret key or a second key fails)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ $KEY_REF =~ ^[0-9a-f]{40}$ ]] || { echo "::error::key_ref must be a full commit SHA"; exit 1; }
+          gh api "repos/FreeSynergy-Net/fs-release/contents/release-signing-key.asc?ref=$KEY_REF" --jq .content | base64 -d > "$RUNNER_TEMP/raw.asc"
+          scripts/pubkey.sh "$RUNNER_TEMP/raw.asc" "$KEY_FPR" "$RUNNER_TEMP/key.asc"
+      - name: Build fs-blueprint at the pinned fs-release commit (toolchain = RUST_VERSION of that commit)
+        run: |
+          set -euo pipefail
+          rv=$(curl -fsSL "https://raw.githubusercontent.com/FreeSynergy-Net/fs-release/$BLUEPRINT_SHA/RUST_VERSION" | tr -d '[:space:]')
+          rustup toolchain install "$rv" --profile minimal
+          cargo "+$rv" install --git https://github.com/FreeSynergy-Net/fs-release --rev "$BLUEPRINT_SHA" fs-blueprint --locked --root "$RUNNER_TEMP/bp"
+      - name: Make freesynergy-release (unsigned; the Pages address is the real one)
+        run: |
+          set -euo pipefail
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) "$RUNNER_TEMP/bp/bin/fs-blueprint" package release --key "$RUNNER_TEMP/key.asc" --pages-url "$PAGES_URL" --out release-pkg
+          files=(release-pkg/*.rpm); test "${#files[@]}" = 1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-src
+          path: release-pkg
+          retention-days: 3
   rpm-packages:
-    needs: build
+    needs: [build, release-pkg]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment: apt-signing
@@ -95,6 +133,10 @@ jobs:
         with:
           name: rpm-src
           path: rpms
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-src
+          path: rpms/stable
       - name: Sign every package with the signing subkey (temporary GNUPGHOME; no foreign code runs here)
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
@@ -131,9 +173,10 @@ jobs:
           sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends createrepo-c libxml2-utils xz-utils zstd
           cargo install createrepo_rs --version =0.1.9 --locked --root "$RUNNER_TEMP/tools"
           export PATH=$RUNNER_TEMP/tools/bin:$PATH
-          first=$(ls -d rpms/*/ | head -n1); tool=$(scripts/gate-createrepo.sh "$first")
+          tool=createrepo_rs   # gate EVERY channel that has packages; one difference switches all channels to createrepo_c; a channel without .rpm is skipped
+          for d in rpms/*/; do compgen -G "$d*.rpm" > /dev/null || { echo "no .rpm in $d, skipped"; continue; }; [[ $(scripts/gate-createrepo.sh "$d") == createrepo_rs ]] || tool=createrepo_c; done
           echo "CREATEREPO=$tool" >> "$GITHUB_ENV"; echo "createrepo tool: $tool"
-          for d in rpms/*/; do ch=$(basename "$d"); compgen -G "$d*.rpm" > /dev/null && PATH=$PATH CREATEREPO=$tool scripts/build-rpm.sh "$d" "$ch" rpm-tree; done
+          for d in rpms/*/; do ch=$(basename "$d"); compgen -G "$d*.rpm" > /dev/null || continue; CREATEREPO=$tool scripts/build-rpm.sh "$d" "$ch" rpm-tree; done
           test -d rpm-tree/rpm || { echo "::error::no rpm channel built"; exit 1; }
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -167,8 +210,16 @@ jobs:
           printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import 2> /dev/null; printf '%s' "$GPG_PASSPHRASE" > "$RUNNER_TEMP/pp"
           for d in rpm-tree/rpm/*/; do scripts/sign-rpm.sh --passphrase-file "$RUNNER_TEMP/pp" --key "$KEY_FPR" repo "$d"; done
           shred -u "$RUNNER_TEMP/pp"; gpgconf --kill gpg-agent || true
-          gh api "repos/FreeSynergy-Net/fs-release/contents/release-signing-key.asc?ref=$KEY_REF" --jq .content | base64 -d > rpm-tree/rpm/RPM-GPG-KEY-freesynergy
-          for d in rpm-tree/rpm/*/; do gpg --batch --verify "$d/repodata/repomd.xml.asc" "$d/repodata/repomd.xml" 2>&1 | grep -q "Good signature" || { echo "::error::repomd signature check failed in $d"; exit 1; }; done
+          [[ $KEY_REF =~ ^[0-9a-f]{40}$ ]] || { echo "::error::key_ref must be a full commit SHA"; exit 1; }
+          gh api "repos/FreeSynergy-Net/fs-release/contents/release-signing-key.asc?ref=$KEY_REF" --jq .content | base64 -d > "$RUNNER_TEMP/raw.asc"
+          scripts/pubkey.sh "$RUNNER_TEMP/raw.asc" "$KEY_FPR" rpm-tree/rpm/RPM-GPG-KEY-freesynergy
+          # verify against the PUBLISHED public key and the pinned fingerprint (own empty GNUPGHOME), not against the secret key just imported
+          for d in rpm-tree/rpm/*/; do scripts/verify-repomd.sh rpm-tree/rpm/RPM-GPG-KEY-freesynergy "$KEY_FPR" "$d/repodata/repomd.xml" "$d/repodata/repomd.xml.asc" || { echo "::error::repomd signature check failed in $d"; exit 1; }; done
+          # freesynergy-release: signed with the same key, checked with a temporary rpm database, placed under its fixed name
+          sudo apt-get install -y -q --no-install-recommends rpm
+          rpm --dbpath "$RUNNER_TEMP/rdb" --import rpm-tree/rpm/RPM-GPG-KEY-freesynergy
+          cp rpm-tree/rpm/stable/freesynergy-release-*.noarch.rpm rpm-tree/rpm/freesynergy-release.noarch.rpm
+          rpm --dbpath "$RUNNER_TEMP/rdb" -K rpm-tree/rpm/freesynergy-release.noarch.rpm   # rc != 0 when the signature does not verify
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: rpm-site
