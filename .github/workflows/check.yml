@@ -13,8 +13,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Tools (apt-ftparchive from apt-utils, shellcheck)
-        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends apt-utils shellcheck gnupg gpgv xz-utils
+      - name: Tools (apt-ftparchive from apt-utils, shellcheck, rpm for rpmbuild/rpmsign)
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends apt-utils shellcheck gnupg gpgv xz-utils rpm cpio
       - name: Shellcheck
         run: shellcheck scripts/*.sh
       - name: Nightly ref gate (main / ancestor accepted; branch, tag, foreign commit refused)
@@ -25,5 +25,5 @@ jobs:
           out=$(scripts/test_apt.sh)
           echo "$out"
           if grep -q '^SKIPPED' <<< "$out"; then echo "::error::a test part was skipped in CI"; exit 1; fi
-      - name: Self-test of the key scripts (pubkey.sh, verify-repomd.sh; throwaway keys)
+      - name: Self-test of the key scripts (pubkey.sh, verify-repomd.sh, check-rpm-signed.sh, check-release-pkg.sh; throwaway keys; no skip in CI)
         run: scripts/test_verify.sh

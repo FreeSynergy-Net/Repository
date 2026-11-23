@@ -2,14 +2,14 @@
 # Three jobs: build (no secrets) -> sign (environment apt-signing, secrets only there, no foreign code) -> deploy (Pages).
 # The site is rebuilt completely from the signed releases (stateless; the releases stay the source of truth). Both suites are rebuilt,
 # because a Pages deploy replaces the whole site.
-# Pins: all actions by commit SHA. Three values are still REPLACE_SHA on purpose and must be entered after review (check each against its tag with gh api first):
-#   fs-release sign-apt      = the commit of the merged fs-release 0.0.7 (5b0757969226212c1e4add9a2c00fcc56443f6bf is the unreviewed head; use it only after the 0.0.7 merge)
+# Pins: all actions by commit SHA, each checked against its tag with gh api on 2026-11-23 (annotated tags dereferenced). No placeholder is left.
+# APT signing: the fs-release action sign-apt is NOT merged in fs-release (not on main, in no tag; v0.0.7 does not contain it), so it is not used: job sign calls scripts/sign-apt.sh itself (temporary GNUPGHOME, same pattern as the rpm jobs).
 # rpm channel (rpm/stable = releases, rpm/nightly = pre-releases): build -> rpm-packages (key) -> rpm-index (no key, createrepo_rs gated against createrepo_c) -> rpm-sign (key) -> site.
 # freesynergy-release: job release-pkg builds it (no secrets, fs-blueprint at BLUEPRINT_SHA), rpm-packages signs it, rpm-sign checks it and puts it at rpm/freesynergy-release.noarch.rpm (also in rpm/stable).
 # Version of freesynergy-release = fs-blueprint version; when the key or the Pages URL changes, --pkg-version MUST be raised in job release-pkg.
 # It uses the same environment apt-signing and the same two secrets; nothing new is created. The rpm steps below use the key only through scripts/sign-rpm.sh.
-#   upload-pages-artifact    = v5.0.0 fc324d3547104276b827a68afc52ff2a11cc49c9 (checked against the tag 2026-11-14)
-#   deploy-pages             = v5.0.1 368f82528645a54fb793d4d04e342629a3f51346 (checked against the tag 2026-11-14)
+#   upload-pages-artifact    = v5.0.0 fc324d3547104276b827a68afc52ff2a11cc49c9
+#   deploy-pages             = v5.0.1 368f82528645a54fb793d4d04e342629a3f51346
 # Repository setting to switch on: "Require actions to be pinned to a full-length commit SHA".
 name: publish
 on:
@@ -139,6 +139,12 @@ jobs:
         with:
           name: release-src
           path: rpms/stable
+      - name: Trust anchor freesynergy-release (built without secrets from third-party crates): key = the pinned one, repo file as expected, BEFORE it is signed
+        run: |
+          set -euo pipefail
+          sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends rpm cpio gnupg
+          files=(rpms/stable/freesynergy-release-*.noarch.rpm); test "${#files[@]}" = 1
+          scripts/check-release-pkg.sh "${files[0]}" "$KEY_FPR" "$PAGES_URL"
       - name: Sign every package with the signing subkey (temporary GNUPGHOME; no foreign code runs here)
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
@@ -221,7 +227,7 @@ jobs:
           sudo apt-get install -y -q --no-install-recommends rpm
           rpm --dbpath "$RUNNER_TEMP/rdb" --import rpm-tree/rpm/RPM-GPG-KEY-freesynergy
           cp rpm-tree/rpm/stable/freesynergy-release-*.noarch.rpm rpm-tree/rpm/freesynergy-release.noarch.rpm
-          rpm --dbpath "$RUNNER_TEMP/rdb" -K rpm-tree/rpm/freesynergy-release.noarch.rpm   # rc != 0 when the signature does not verify
+          scripts/check-rpm-signed.sh --dbpath "$RUNNER_TEMP/rdb" rpm-tree/rpm/freesynergy-release.noarch.rpm   # plain rpm check exits 0 for an UNSIGNED package; this needs "digests signatures OK"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: rpm-site
@@ -244,12 +250,17 @@ jobs:
         with:
           name: apt-unsigned
           path: repo
-      - name: Sign every suite (InRelease + Release.gpg; fs-release action, key only in a temporary GNUPGHOME)
-        uses: FreeSynergy-Net/fs-release/actions/sign-apt@REPLACE_SHA # fs-release 0.0.7 commit (see header)
-        with:
-          directory: repo
-          private-key: ${{ secrets.GPG_PRIVATE_KEY }}
-          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+      - name: Sign every suite (InRelease + Release.gpg; scripts/sign-apt.sh, key only in a temporary GNUPGHOME of this job)
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          test -n "$GPG_PRIVATE_KEY" || { echo "::error::GPG_PRIVATE_KEY is empty - refusing to continue unsigned"; exit 1; }
+          export GNUPGHOME=$RUNNER_TEMP/gh; mkdir -m700 "$GNUPGHOME"; umask 077
+          printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import 2> /dev/null; printf '%s' "$GPG_PASSPHRASE" > "$RUNNER_TEMP/pp"
+          for d in repo/dists/*/; do scripts/sign-apt.sh --passphrase-file "$RUNNER_TEMP/pp" --key "$KEY_FPR" repo "$(basename "$d")"; done
+          shred -u "$RUNNER_TEMP/pp"; gpgconf --kill gpg-agent || true
       - name: Verify against the public key (nothing secret is printed), assemble the site
         env:
           GH_TOKEN: ${{ github.token }}
@@ -269,7 +280,7 @@ jobs:
           path: site
           retention-days: 3
       - if: ${{ inputs.deploy }}
-        uses: actions/upload-pages-artifact@REPLACE_SHA # v5.0.0 (see header)
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: site
   deploy:
@@ -289,4 +300,4 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - id: deploy
-        uses: actions/deploy-pages@REPLACE_SHA # v5.0.1 (see header)
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

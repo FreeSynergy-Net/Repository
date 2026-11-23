@@ -11,7 +11,7 @@ truth (`.deb` + detached `.asc`); this repository only builds a derived, signed 
 |--------|-----|
 | `scripts/fetch-releases.sh` | newest 3 releases per repo and suite, keeps only `.deb` whose `.asc` verifies against the project key |
 | `scripts/build-apt.sh` | `pool/` + `dists/` with `apt-ftparchive`, retention 3 versions per package and architecture, unsigned |
-| `scripts/sign-apt.sh` | `InRelease` + `Release.gpg` with a given key (in CI: the `sign-apt` action of fs-release, signing job only) |
+| `scripts/sign-apt.sh` | `InRelease` + `Release.gpg` with a given key (in CI: called by the signing job only, temporary GNUPGHOME) |
 | `scripts/verify-apt.sh` | signature against a keyring, Release hashes against the files, Packages against the pool |
 | `scripts/make-site.sh` | Pages layout: `apt/{dists,pool,keyring,.sources}` + `index.html` |
 | `scripts/test_apt.sh` | self-test with throwaway keys and self-built `.deb` (build, sign, verify, counter-checks, retention) |
