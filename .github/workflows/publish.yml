@@ -120,8 +120,34 @@ jobs:
           name: release-src
           path: release-pkg
           retention-days: 3
+  release-check:
+    # The ONLY place that reads the third-party-built freesynergy-release package. NO environment, NO secrets: whatever the package
+    # contains can reach nothing. It is never unpacked (listed, then read to stdout). The key job only compares the sha256 of the package.
+    needs: release-pkg
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.chk.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-src
+          path: release-pkg
+      - name: Trust anchor freesynergy-release (key = the pinned one, repo file and package contents as expected; nothing is unpacked)
+        id: chk
+        run: |
+          set -euo pipefail
+          sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends rpm cpio gnupg
+          files=(release-pkg/freesynergy-release-*.noarch.rpm); test "${#files[@]}" = 1; test "$(ls release-pkg | wc -l)" = 1
+          scripts/check-release-pkg.sh "${files[0]}" "$KEY_FPR" "$PAGES_URL"
+          echo "sha=$(sha256sum "${files[0]}" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
   rpm-packages:
-    needs: [build, release-pkg]
+    needs: [build, release-check]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment: apt-signing
@@ -139,12 +165,14 @@ jobs:
         with:
           name: release-src
           path: rpms/stable
-      - name: Trust anchor freesynergy-release, checked BEFORE it is signed (built without secrets from third-party crates; key = the pinned one, repo file as expected)
+      - name: The package to be signed is exactly the one release-check approved (sha256; the package is not parsed in this job)
+        env:
+          CHECKED_SHA: ${{ needs.release-check.outputs.sha }}
         run: |
           set -euo pipefail
-          sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends rpm cpio gnupg
+          [[ $CHECKED_SHA =~ ^[0-9a-f]{64}$ ]] || { echo "::error::no sha256 from release-check"; exit 1; }
           files=(rpms/stable/freesynergy-release-*.noarch.rpm); test "${#files[@]}" = 1
-          scripts/check-release-pkg.sh "${files[0]}" "$KEY_FPR" "$PAGES_URL"
+          [[ $(sha256sum "${files[0]}" | cut -d' ' -f1) == "$CHECKED_SHA" ]] || { echo "::error::freesynergy-release differs from the checked package"; exit 1; }
       - name: Sign every package with the signing subkey (temporary GNUPGHOME; no foreign code runs here)
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}

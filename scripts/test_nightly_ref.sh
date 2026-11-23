@@ -52,10 +52,15 @@ grep -q 'needs: \[check, build\]' <<< "$signjob" && ok "sign needs check and bui
 # text checks on the workflows (S-R2/S-R3/S-R5, REPLACE_SHA)
 pw=$here/../.github/workflows/publish.yml
 ! grep -q 'REPLACE_SHA' "$pw" && ok "publish.yml: no REPLACE_SHA left" || bad "publish.yml still has REPLACE_SHA"
-! grep -hE '^ *(- )?uses: .*@' "$wf" "$pw" | grep -vE '@[0-9a-f]{40}( |$)' | grep -q . && ok "every action is pinned by a full SHA" || bad "an action is not pinned by a full SHA"
+! grep -hE '^ *(- )?uses: .*@' "$here"/../.github/workflows/*.yml | grep -vE '@[0-9a-f]{40}( |$)' | grep -q . && ok "every action is pinned by a full SHA" || bad "an action is not pinned by a full SHA"
 grep -q 'scripts/pubkey.sh' "$wf" && ! grep -q "awk -F: '/\^fpr:/ {print \$10; exit}'" "$wf" && ok "nightly.yml: key check via pubkey.sh, not the first fingerprint" || bad "nightly.yml key check is not pubkey.sh"
 { grep -q 'check-rpm-signed.sh' "$wf" && grep -q 'check-rpm-signed.sh' "$pw" && ! grep -qE 'rpm .*-K ' "$wf" "$pw"; } && ok "rpm signature check via check-rpm-signed.sh in both workflows" || bad "a workflow uses plain rpm -K"
 grep -q 'check-release-pkg.sh' "$pw" && ok "publish.yml checks freesynergy-release before signing" || bad "no check-release-pkg.sh in publish.yml"
 a=$(grep -n 'check-release-pkg.sh' "$pw" | head -1 | cut -d: -f1); s=$(grep -n 'Sign every package with the signing subkey' "$pw" | head -1 | cut -d: -f1)
 [[ -n $a && -n $s && $a -lt $s ]] && ok "release pkg check stands before rpm signing" || bad "release pkg check not before signing"
+rc=$(awk '/^  release-check:$/ {s=1; next} s && /^  [a-z-]+:$/ {exit} s {print}' "$pw")
+rp=$(awk '/^  rpm-packages:$/ {s=1; next} s && /^  [a-z-]+:$/ {exit} s {print}' "$pw")
+{ grep -q 'check-release-pkg.sh' <<< "$rc" && ! grep -qE '^    environment:|secrets\.' <<< "$rc"; } && ok "release-check job runs check-release-pkg.sh, without environment and secrets" || bad "release-check missing or has environment/secrets"
+! grep -q 'check-release-pkg.sh' <<< "$rp" && grep -q 'needs: \[build, release-check\]' <<< "$rp" && grep -q 'needs.release-check.outputs.sha' <<< "$rp" && grep -q 'sha256sum' <<< "$rp" && ok "key job only compares the sha256 of the checked package" || bad "rpm-packages parses the package or does not compare the checked sha256"
+! grep -E 'cpio ' "$here/check-release-pkg.sh" | grep -v '^#' | grep -qE 'cpio.* -[a-z]*d[a-z]*( |$)' && ok "check-release-pkg.sh never uses cpio -d (no unpack)" || bad "check-release-pkg.sh unpacks"
 exit $fail
