@@ -53,7 +53,7 @@ By default `Release` has no `Valid-Until`, so the repository never expires for c
 Order matters, because signing a package changes its checksum: `fetch-releases.sh` (`FETCH_EXT=rpm`) -> `sign-rpm.sh ... packages DIR` (rpmsign, key job) ->
 `build-rpm.sh RPMDIR stable|nightly OUTDIR` (repodata by `createrepo_rs` 0.1.9, GPL-2.0, CI only, never shipped; `CREATEREPO=createrepo_c` is the fallback) ->
 `sign-rpm.sh ... repo rpm/<channel>` (`repomd.xml.asc`). `gate-createrepo.sh` compares createrepo_rs against createrepo_c on the same rpms and prints the tool to use.
-Local gate (podman, throwaway Fedora container, throwaway key only inside it): `scripts/test-rpm-container.sh RPMDIR` — install works; tampered package, tampered repomd.xml and unsigned package are refused; then rpmlint.
+Local gate (podman, throwaway Fedora container, throwaway key only inside it): `scripts/test-rpm-container.sh RPMDIR` — install works; tampered package, tampered repomd.xml and unsigned package are refused; then the unowned-directory check (per package: itself + Requires chain, `unowned-dirs.sh`) and rpmlint (any E = red, W allowed).
 
 ## Switching on GitHub Pages (owner, once; not done by agents)
 
