@@ -23,3 +23,5 @@ jobs:
           out=$(scripts/test_apt.sh)
           echo "$out"
           if grep -q '^SKIPPED' <<< "$out"; then echo "::error::a test part was skipped in CI"; exit 1; fi
+      - name: Self-test of the key scripts (pubkey.sh, verify-repomd.sh; throwaway keys)
+        run: scripts/test_verify.sh
