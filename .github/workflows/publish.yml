@@ -1,4 +1,4 @@
-# DRAFT - never run yet (rpm part: gate only run locally in a container, see docs/en/README.md). A person triggers it (workflow_dispatch) after the strategy decision to publish; nothing runs on push.
+# DRAFT - never run yet (the rpm-index-gate job has never run; only `scripts/test-rpm-container.sh` was run locally in a container, see docs/en/README.md). A person triggers it (workflow_dispatch) after the strategy decision to publish; nothing runs on push.
 # Jobs: build, release-pkg, release-check (no secrets) -> sign (ONE job with the key, environment apt-signing: ONE approval per run; createrepo_c from the Ubuntu archive) -> rpm-index-gate (createrepo_rs, NO key) -> deploy (needs both).
 # The site is rebuilt completely from the signed releases (stateless; the releases stay the source of truth). Both suites are rebuilt,
 # because a Pages deploy replaces the whole site.

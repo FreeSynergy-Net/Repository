@@ -5,7 +5,7 @@
 # (publish.yml takes only version-tagged releases). Version <next>~nightly.<UTC stamp>.g<sha7> (scripts/nightly-version.sh).
 # Three jobs: build (no secrets) -> sign (environment apt-signing, the existing secrets GPG_PRIVATE_KEY / GPG_PASSPHRASE, nothing new) -> upload (no secrets, only contents: write).
 # Only CI-built files go in: nothing built locally is ever uploaded. The files land on the rolling pre-release `nightly` of THIS repository (3 versions per package and
-# architecture, scripts/nightly-retain.sh); the next run of publish.yml (also by a person) puts them into rpm/nightly of the dnf repository.
+# architecture, scripts/nightly-retain.sh); the next run of publish.yml (also by a person) does NOT put them into the dnf channel (they stay a download from the release `nightly`).
 # Signing: fs-release action sign-files (the one the releases use): rpmsign header signature + detached .asc by the project key; here no key = failure (the action alone would only warn).
 # Pins: all actions by commit SHA; the fs-release actions at 15935ed (the SHA the caller repos use for their releases).
 name: nightly
