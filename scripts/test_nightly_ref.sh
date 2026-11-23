@@ -28,4 +28,17 @@ guard=$(awk '/Stop unless the verified commit/ {s=1} s && /run: \|/ {r=1; next} 
 SHA="" bash -c "$guard" > /dev/null 2>&1 && bad "build guard passes an empty SHA" || ok "build guard stops an empty SHA"
 SHA="main" bash -c "$guard" > /dev/null 2>&1 && bad "build guard passes a branch name" || ok "build guard stops a non-SHA"
 SHA="$b" bash -c "$guard" > /dev/null 2>&1 && ok "build guard passes a full SHA" || bad "build guard rejects a good SHA"
+# second barrier in job sign (scripts/nightly-verify-built.sh) + its place in nightly.yml: before the first secret reference
+v=$here/nightly-verify-built.sh; mkdir "$w/bd"
+printf '%s\n' "$b" > "$w/bd/built-sha-x86_64.txt"; printf '%s\n' "$b" > "$w/bd/built-sha-aarch64.txt"
+"$v" "$b" "$w/bd" 2 > /dev/null 2>&1 && ok "same SHA: sign goes on" || bad "same SHA rejected"
+"$v" "$a" "$w/bd" 2 > /dev/null 2>&1 && bad "different SHA accepted" || ok "different SHA: stop"
+"$v" "" "$w/bd" 2 > /dev/null 2>&1 && bad "empty expected SHA accepted" || ok "empty expected SHA: stop"
+printf '' > "$w/bd/built-sha-aarch64.txt"; "$v" "$b" "$w/bd" 2 > /dev/null 2>&1 && bad "empty built SHA accepted" || ok "empty built SHA: stop"
+printf '%s\n' "$a" > "$w/bd/built-sha-aarch64.txt"; "$v" "$b" "$w/bd" 2 > /dev/null 2>&1 && bad "one differing build accepted" || ok "one build differs: stop"
+rm "$w/bd/built-sha-aarch64.txt"; "$v" "$b" "$w/bd" 2 > /dev/null 2>&1 && bad "missing build record accepted" || ok "missing build record: stop"
+signjob=$(awk '/^  sign:$/ {s=1} s && /^  upload:$/ {exit} s {print}' "$wf")
+first=$(grep -n 'secrets\.' <<< "$signjob" | head -1 | cut -d: -f1); gate=$(grep -n 'nightly-verify-built.sh' <<< "$signjob" | head -1 | cut -d: -f1)
+[[ -n $gate && -n $first && $gate -lt $first ]] && ok "verify step stands before the first secret reference" || bad "verify step not before secrets (gate $gate, secret $first)"
+grep -q 'needs: \[check, build\]' <<< "$signjob" && ok "sign needs check and build" || bad "sign does not need check"
 exit $fail
