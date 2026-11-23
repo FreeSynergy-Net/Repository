@@ -9,5 +9,7 @@ podman run --rm -e CREATEREPO="${CREATEREPO:-createrepo_c}" -v "$root:/src:ro,z"
   cp -r /src /w && cd /w; t=0; bash scripts/test_rpm.sh /rpms || t=1
   echo "--- NAMED FINDING unowned-directory (per package: itself + its Requires chain; open until fs-starter owns them via %dir, PKG-5; must then be empty)"
   bash scripts/unowned-dirs.sh /rpms
+  printf "Name: fs-empty\nVersion: 1\nRelease: 1\nSummary: e\nLicense: MIT\nBuildArch: noarch\n%%description\ne\n%%files\n" > /e.spec; rpmbuild -bb --define "_topdir /rb" /e.spec > /dev/null 2>&1
+  mkdir /p6; cp /rb/RPMS/noarch/fs-empty*.rpm /p6/; timeout 20 bash scripts/unowned-dirs.sh /p6 && echo "PASS: rpm without files does not hang unowned-dirs" || { echo "FAIL: unowned-dirs hang/error on empty rpm"; t=1; }
   echo "--- rpmlint: any E makes the gate red (exit code of rpmlint); W alone do not (see docs)"; rpmlint /rpms/*.rpm; r=$?; exit $((r | t))
 '

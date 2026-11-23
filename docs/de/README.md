@@ -10,6 +10,9 @@ index.html                                  Fingerabdruck + Links
 apt/freesynergy.sources                     fertige deb822-Datei
 apt/freesynergy-archive-keyring.{pgp,asc}   öffentlicher Schlüssel (binär für Signed-By, ASCII für Menschen)
 apt/dists/<suite>/{Release,InRelease,Release.gpg}
+rpm/RPM-GPG-KEY-freesynergy                 öffentlicher Schlüssel (derselbe wie bei apt)
+rpm/stable/{*.rpm,repodata/}                dnf-Kanal = Releases; repodata/repomd.xml.asc = abgetrennte Signatur (repo_gpgcheck=1)
+rpm/nightly/{*.rpm,repodata/}               dnf-Kanal = Vorabversionen
 apt/dists/<suite>/main/binary-amd64/Packages{,.gz,.xz}
 apt/pool/<suite>/<prefix>/<paket>/<paket>_<version>_<arch>.deb
 ```
@@ -43,3 +46,16 @@ Standardmäßig hat `Release` kein `Valid-Until`, das Repo läuft für Clients n
 - `fetch-releases.sh` und `make-site.sh` liefen nicht gegen echte Releases (Trockenlauf mit lokalen Testbauten zentinel 26.11.2-1, kanidmd 1.12.1-1).
 - Der Schlüssel im Secret ist angenommen als nur Unterschlüssel; er läuft 2027-11-07 ab (vorher verlängern, Keyring neu veröffentlichen).
 - Selbsttest und Trockenlauf (`scripts/test-container.sh`) in debian:13, debian:12, ubuntu:24.04: apt update/install, manipulierter Index/InRelease abgelehnt.
+
+## rpm-Kanal
+
+`freesynergy-release` (gebaut mit `fs-blueprint package release --pages-url https://freesynergy-net.github.io/Repository`) zeigt dnf auf `<pages>/rpm/stable` (aktiv) und `<pages>/rpm/nightly` (aus), mit `gpgcheck=1` und `repo_gpgcheck=1`.
+Die Reihenfolge ist wichtig, weil das Signieren eines Pakets dessen Prüfsumme ändert: `fetch-releases.sh` (`FETCH_EXT=rpm`) -> `sign-rpm.sh ... packages DIR` (rpmsign, Schlüssel-Job) ->
+`build-rpm.sh RPMDIR stable|nightly OUTDIR` (repodata mit `createrepo_rs` 0.1.9, GPL-2.0, nur CI, nie ausgeliefert; Rückfall `CREATEREPO=createrepo_c`) -> `sign-rpm.sh ... repo rpm/<kanal>` (`repomd.xml.asc`).
+`gate-createrepo.sh` vergleicht createrepo_rs mit createrepo_c an denselben RPMs und nennt das zu nutzende Werkzeug.
+Lokales Gate (podman, Wegwerf-Fedora-Container, Wegwerf-Schlüssel nur darin): `scripts/test-rpm-container.sh RPMDIR`. Es prüft: Installation klappt; manipuliertes Paket, manipuliertes repomd.xml und unsigniertes Paket werden aus dem richtigen Grund abgelehnt;
+Verzeichniseigentum je Paket samt Requires-Kette (`unowned-dirs.sh`, Befund UNOWNED bleibt benannt sichtbar); rpmlint (jedes E = rot, W erlaubt).
+
+## GitHub Pages einschalten (Eigentümer, einmalig; nicht durch Agenten)
+
+Repository `FreeSynergy-Net/Repository` > Settings > Pages > Build and deployment > Source: **GitHub Actions**. Dann den Workflow `publish` starten (Actions > publish > Run workflow, `deploy` anhaken).

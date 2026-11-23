@@ -11,7 +11,7 @@ for f in "$dir"/*.rpm; do
     while read -r n _; do for g in ${prov[$n]:-}; do [[ -n ${seen[$g]:-} ]] || { seen[$g]=1; chain+=("$g"); }; done; done < <(rpm -qp --requires "${chain[$i]}")
   done
   owned=$(for g in "${chain[@]}"; do rpm -qpl "$g"; done | sort -u)
-  rpm -qpl "$f" | while read -r p; do d=$(dirname "$p"); while [[ $d != / ]]; do
+  { rpm -qpl "$f" | grep "^/" || true; } | while read -r p; do d=$(dirname "$p"); while [[ $d == /?* ]]; do
     grep -qxF "$d" <<< "$owned" || case $d in /usr/share/freesynergy* | /usr/libexec/freesynergy*) echo "UNOWNED $(basename "$f"): $d" ;; esac; d=$(dirname "$d"); done; done | sort -u
   unset seen
 done
