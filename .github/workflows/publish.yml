@@ -72,7 +72,8 @@ jobs:
           set -euo pipefail
           read -r -a repos <<< "$REPOS"
           for pair in stable:stable nightly:testing; do
-            scripts/fetch-releases.sh "${pair#*:}" "rpms/${pair%%:*}" "$RUNNER_TEMP/key.asc" "$KEY_FPR" "${repos[@]}"
+            extra=(); [[ ${pair%%:*} == nightly ]] && extra=(Repository)   # the rolling pre-release `nightly` of nightly.yml (this repository)
+            scripts/fetch-releases.sh "${pair#*:}" "rpms/${pair%%:*}" "$RUNNER_TEMP/key.asc" "$KEY_FPR" "${repos[@]}" "${extra[@]}"
           done
           echo "stable nightly" > rpms/CHANNELS   # marker: rpm-src always exists, also when no repo has a .rpm (the apt part must not fail for that)
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
