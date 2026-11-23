@@ -61,6 +61,8 @@ if command -v rpmbuild > /dev/null && command -v rpmsign > /dev/null; then
   YATTR='%attr(0644,nobody,nobody)' mkrpm m2 "$w/pa.asc" "$w/good.repo"; "$c" "$w/m2.rpm" "$fa" "$U" 2> /dev/null && bad "repo file owner nobody accepted" || ok "repo file owner nobody refused"
   KATTR='%attr(0666,root,root)' mkrpm m3 "$w/pa.asc" "$w/good.repo"; "$c" "$w/m3.rpm" "$fa" "$U" 2> /dev/null && bad "key file mode 0666 accepted" || ok "key file mode 0666 refused"
   YCFG='' mkrpm m4 "$w/pa.asc" "$w/good.repo"; "$c" "$w/m4.rpm" "$fa" "$U" 2> /dev/null && bad "repo file without %config accepted" || ok "repo file without %config(noreplace) refused"
+  YCFG='%config(noreplace) %doc' mkrpm m5 "$w/pa.asc" "$w/good.repo"; "$c" "$w/m5.rpm" "$fa" "$U" 2> /dev/null && bad "extra flag %doc on the repo file accepted" || ok "extra flag %doc on the repo file refused"
+  KATTR='%doc' mkrpm m6 "$w/pa.asc" "$w/good.repo"; "$c" "$w/m6.rpm" "$fa" "$U" 2> /dev/null && bad "flag %doc on the key file accepted" || ok "flag %doc on the key file refused"
   for d in 'Requires: sudo' 'Recommends: nmap' 'Suggests: nmap' 'Provides: dnf-plugins-core' 'Provides: user(evil)' 'Supplements: bash' 'Enhances: bash'; do
     DEPS=$d$'\n' mkrpm d1 "$w/pa.asc" "$w/good.repo"; "$c" "$w/d1.rpm" "$fa" "$U" 2> /dev/null && bad "dependency '$d' accepted" || ok "dependency '$d' refused"
   done
