@@ -14,7 +14,7 @@ rpm/stable/{*.rpm,repodata/}                dnf channel = releases; repodata/rep
 rpm/nightly/{*.rpm,repodata/}               dnf channel = pre-releases
 ```
 
-`freesynergy-release` (built by `fs-blueprint package release --pages-url https://freesynergy-net.github.io/Repository`) points dnf at `<pages>/rpm/stable` (enabled) and `<pages>/rpm/nightly` (disabled) with `gpgcheck=1` and `repo_gpgcheck=1`.
+`freesynergy-release` (built by `fs-blueprint package release --fingerprint <pinned FPR> --pages-url https://freesynergy-net.github.io/Repository`) points dnf at `<pages>/rpm/stable` (enabled) and `<pages>/rpm/nightly` (disabled) with `gpgcheck=1` and `repo_gpgcheck=1`.
 
 First install, always in this order: fetch `<pages>/rpm/RPM-GPG-KEY-freesynergy`, compare the fingerprint (`16A4 A3EE 563A EF51 FCF0 C55D ED7B 57C4 A190 4342`), `rpm --import`, then `dnf install --setopt=localpkg_gpgcheck=1 <pages>/rpm/freesynergy-release.noarch.rpm` (Fedora does not check the signature of local or URL packages by default, so without that option an unimported key is not noticed). The version of `freesynergy-release` follows the fs-blueprint version; when the key or the Pages URL changes, `--pkg-version` MUST be raised in the `release-pkg` job of `publish.yml`.
 

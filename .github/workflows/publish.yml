@@ -32,8 +32,8 @@ env:
   BASE_URL: "https://freesynergy-net.github.io/Repository/apt/"
   KEY_REF: ${{ inputs.key_ref }}
   PAGES_URL: "https://freesynergy-net.github.io/Repository"
-  # fs-blueprint source (ONE line to change: BLUEPRINT_SHA below): only a commit that is on main of fs-release may be pinned; 152afc1 is a development stand, replace it by the main commit once package-rpm has landed.
-  BLUEPRINT_SHA: "152afc136391ad85e304478a911b89677359221c"
+  # fs-blueprint source (ONE line to change: BLUEPRINT_SHA below): only a commit that is on main of fs-release may be pinned; 1932e8e is the main commit of fs-release with package-rpm-r2 (never a branch head).
+  BLUEPRINT_SHA: "1932e8edafbe4b17c86675a2379cda1a9cedff51"
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -113,7 +113,7 @@ jobs:
       - name: Make freesynergy-release (unsigned; the Pages address is the real one)
         run: |
           set -euo pipefail
-          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) "$RUNNER_TEMP/bp/bin/fs-blueprint" package release --key "$RUNNER_TEMP/key.asc" --pages-url "$PAGES_URL" --out release-pkg
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) "$RUNNER_TEMP/bp/bin/fs-blueprint" package release --key "$RUNNER_TEMP/key.asc" --fingerprint "$KEY_FPR" --pages-url "$PAGES_URL" --out release-pkg
           files=(release-pkg/*.rpm); test "${#files[@]}" = 1
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
