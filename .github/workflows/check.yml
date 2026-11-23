@@ -17,6 +17,8 @@ jobs:
         run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends apt-utils shellcheck gnupg gpgv xz-utils
       - name: Shellcheck
         run: shellcheck scripts/*.sh
+      - name: Nightly ref gate (main / ancestor accepted; branch, tag, foreign commit refused)
+        run: scripts/test_nightly_ref.sh
       - name: Self-test (retention, build, sign, verify, counter-checks)
         run: |
           set -euo pipefail
