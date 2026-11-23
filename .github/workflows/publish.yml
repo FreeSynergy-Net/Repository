@@ -125,12 +125,17 @@ jobs:
     # contains can reach nothing. It is never unpacked (listed, then read to stdout). The key job only compares the sha256 of the package.
     needs: release-pkg
     runs-on: ubuntu-24.04
+    # Fedora container, pinned by digest (multi-arch index): the rpm that reads the header must be at least as new as the rpm of the target (Fedora 45: rpm 6.1,
+    # knows %preuntrans/%postuntrans; the runner rpm 4.18 would not show them). check-release-pkg.sh refuses an rpm without those tags. Raise the digest with the target.
+    container: registry.fedoraproject.org/fedora:45@sha256:e203b4174f6a2ce6c160ddc4917d85e6bfce32dfc610d953b355d63ec4c17909
     timeout-minutes: 10
     permissions:
       contents: read
     outputs:
       sha: ${{ steps.chk.outputs.sha }}
     steps:
+      - name: Tools (the container is minimal)
+        run: dnf -y -q install rpm cpio gnupg2 git tar findutils
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -142,8 +147,8 @@ jobs:
         id: chk
         run: |
           set -euo pipefail
-          sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends rpm cpio gnupg
-          files=(release-pkg/freesynergy-release-*.noarch.rpm); test "${#files[@]}" = 1; test "$(ls release-pkg | wc -l)" = 1
+          rpm --version
+          files=(release-pkg/freesynergy-release-*.noarch.rpm); test "${#files[@]}" = 1; test "$(ls -A release-pkg | wc -l)" = 1
           scripts/check-release-pkg.sh "${files[0]}" "$KEY_FPR" "$PAGES_URL"
           echo "sha=$(sha256sum "${files[0]}" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
   rpm-packages:

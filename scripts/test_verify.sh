@@ -22,14 +22,15 @@ echo tampered > "$w/x.xml"; "$here/verify-repomd.sh" "$w/o.asc" "$fa" "$w/x.xml"
 if command -v rpmbuild > /dev/null && command -v rpmsign > /dev/null; then
   U=https://x.example/Repository; R=/etc/pki/rpm-gpg/RPM-GPG-KEY-freesynergy; Y=/etc/yum.repos.d/freesynergy.repo
   repof() { printf '[freesynergy]\nname=FreeSynergy (stable)\nbaseurl=%s/rpm/stable\nenabled=%s\ngpgcheck=%s\nrepo_gpgcheck=1\ngpgkey=file://%s\n\n[freesynergy-nightly]\nname=FreeSynergy (nightly, for testers)\nbaseurl=%s/rpm/nightly\nenabled=0\ngpgcheck=1\nrepo_gpgcheck=1\ngpgkey=file://%s\n' "$1" "$2" "$3" "$R" "$1" "$R"; }
-  mkrpm() { # NAME KEYFILE REPOFILE -> $w/NAME.rpm; env: EXTRA=/path (third file), UNC=1 (uncompressed payload), POST=1 (%post scriptlet)
+  mkrpm() { # NAME KEYFILE REPOFILE -> $w/NAME.rpm; env: EXTRA=/path (third file), UNC=1 (uncompressed payload), POST=1 (%post), PREUN=1 (%preuntrans), DEPS="Requires: ...\n", KATTR/YATTR="%attr(..)" for the key/repo file, YCFG="" (repo file without %config)
     local xi; xi="mkdir -p %{buildroot}$(dirname "${EXTRA:-/x}"); touch %{buildroot}${EXTRA:-}"$'\n'
     mkdir -p "$w/rb/$1"; cp "$2" "$w/rb/$1/key"; cp "$3" "$w/rb/$1/repo"
     printf 'Name: %s\nVersion: 1\nRelease: 1\nSummary: t\nLicense: MIT\nBuildArch: noarch\n%s%%description\nt\n%%install\nmkdir -p %%{buildroot}/etc/pki/rpm-gpg %%{buildroot}/etc/yum.repos.d\ncp %s/key %%{buildroot}%s\ncp %s/repo %%{buildroot}%s\n%s%%files\n%s\n%s\n%s\n%s' \
-      "$1" "${UNC:+%define _binary_payload w.ufdio$'\n'}" "$w/rb/$1" "$R" "$w/rb/$1" "$Y" "${EXTRA:+$xi}" "$R" "$Y" "${EXTRA:-}" "${POST:+%post$'\n'true$'\n'}" > "$w/$1.spec"; rpmbuild -bb --define "_topdir $w/rt" "$w/$1.spec" > /dev/null 2>&1; cp "$w"/rt/RPMS/noarch/"$1"-1-1.noarch.rpm "$w/$1.rpm"; }
+      "$1" "${DEPS:-}${UNC:+%define _binary_payload w.ufdio$'\n'}" "$w/rb/$1" "$R" "$w/rb/$1" "$Y" "${EXTRA:+$xi}" "${KATTR:-} $R" "${YATTR:-} ${YCFG-%config(noreplace)} $Y" "${EXTRA:-}" "${POST:+%post$'\n'true$'\n'}${PREUN:+%preuntrans$'\n'true$'\n'}" > "$w/$1.spec"; rpmbuild -bb --define "_topdir $w/rt" "$w/$1.spec" > /dev/null 2>&1; cp "$w"/rt/RPMS/noarch/"$1"-1-1.noarch.rpm "$w/$1.rpm"; }
   repof "$U" 1 1 > "$w/good.repo"; "$here/pubkey.sh" "$w/a.asc" "$fa" "$w/pa.asc"
   mkrpm good "$w/pa.asc" "$w/good.repo"
   s=$here/check-rpm-signed.sh; c=$here/check-release-pkg.sh
+  rpm --querytags | grep -qx PREUNTRANS || export FS_ALLOW_OLD_RPM=1   # the runner rpm (4.18) is old; the Fedora job is not
   "$s" "$w/good.rpm" 2> /dev/null && bad "UNSIGNED rpm accepted by check-rpm-signed" || ok "unsigned rpm refused (plain rpm -K says rc=$(rpm -K "$w/good.rpm" > /dev/null 2>&1; echo $?))"
   cp "$w/good.rpm" "$w/signed.rpm"; rpmsign --addsign --define "_gpg_name $fa" --define "_gpg_path $GNUPGHOME" "$w/signed.rpm" > /dev/null 2>&1
   "$s" --dbpath "$w/db" "$w/signed.rpm" 2> /dev/null && bad "signed rpm accepted without the key" || ok "signed rpm without imported key refused"
@@ -55,5 +56,18 @@ if command -v rpmbuild > /dev/null && command -v rpmsign > /dev/null; then
   awk '{print} /^baseurl=/ && !d {print "  https://evil.example/r"; d=1}' "$w/good.repo" > "$w/c1.repo"; mkrpm c1 "$w/pa.asc" "$w/c1.repo"; "$c" "$w/c1.rpm" "$fa" "$U" 2> /dev/null && bad "continuation line accepted" || ok "repo file continuation line refused"
   { cat "$w/good.repo"; printf 'gpgcheck = 0\n'; } > "$w/c2.repo"; mkrpm c2 "$w/pa.asc" "$w/c2.repo"; "$c" "$w/c2.rpm" "$fa" "$U" 2> /dev/null && bad "'gpgcheck = 0' accepted" || ok "repo file 'gpgcheck = 0' refused"
   POST=1 mkrpm c3 "$w/pa.asc" "$w/good.repo"; "$c" "$w/c3.rpm" "$fa" "$U" 2> /dev/null && bad "package with a %post scriptlet accepted" || ok "package with a scriptlet refused"
+  # M-R7 (r8): mode, owner, flags, dependencies of the two files, and a scriptlet kind that only a new rpm (>= 4.20) shows. Each is a counter-test: a package that is wrong in exactly this point.
+  YATTR='%attr(0666,root,root)' mkrpm m1 "$w/pa.asc" "$w/good.repo"; "$c" "$w/m1.rpm" "$fa" "$U" 2> /dev/null && bad "repo file mode 0666 accepted" || ok "repo file mode 0666 refused"
+  YATTR='%attr(0644,nobody,nobody)' mkrpm m2 "$w/pa.asc" "$w/good.repo"; "$c" "$w/m2.rpm" "$fa" "$U" 2> /dev/null && bad "repo file owner nobody accepted" || ok "repo file owner nobody refused"
+  KATTR='%attr(0666,root,root)' mkrpm m3 "$w/pa.asc" "$w/good.repo"; "$c" "$w/m3.rpm" "$fa" "$U" 2> /dev/null && bad "key file mode 0666 accepted" || ok "key file mode 0666 refused"
+  YCFG='' mkrpm m4 "$w/pa.asc" "$w/good.repo"; "$c" "$w/m4.rpm" "$fa" "$U" 2> /dev/null && bad "repo file without %config accepted" || ok "repo file without %config(noreplace) refused"
+  for d in 'Requires: sudo' 'Recommends: nmap' 'Suggests: nmap' 'Provides: dnf-plugins-core' 'Provides: user(evil)' 'Supplements: bash' 'Enhances: bash'; do
+    DEPS=$d$'\n' mkrpm d1 "$w/pa.asc" "$w/good.repo"; "$c" "$w/d1.rpm" "$fa" "$U" 2> /dev/null && bad "dependency '$d' accepted" || ok "dependency '$d' refused"
+  done
+  if rpm --querytags | grep -qx PREUNTRANS; then
+    PREUN=1 mkrpm s1 "$w/pa.asc" "$w/good.repo" && "$c" "$w/s1.rpm" "$fa" "$U" 2> /dev/null && bad "package with %preuntrans accepted" || ok "package with %preuntrans refused"
+  elif [[ -n ${NEED_NEW_RPM:-} ]]; then bad "rpm too old for the %preuntrans counter-test, but NEED_NEW_RPM is set"
+  else echo "NOTE: rpm $(rpm --version) is too old for %preuntrans; that counter-test runs in the Fedora job (NEED_NEW_RPM=1)"
+    FS_ALLOW_OLD_RPM='' "$c" "$w/good.rpm" "$fa" "$U" 2> /dev/null && bad "old rpm accepted without FS_ALLOW_OLD_RPM" || ok "old rpm without FS_ALLOW_OLD_RPM refused"; fi
 else echo "SKIPPED: rpmbuild/rpmsign missing"; [[ -z ${CI:-} ]] || bad "rpm tools missing in CI"; fi
 exit $t

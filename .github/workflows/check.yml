@@ -27,3 +27,16 @@ jobs:
           if grep -q '^SKIPPED' <<< "$out"; then echo "::error::a test part was skipped in CI"; exit 1; fi
       - name: Self-test of the key scripts (pubkey.sh, verify-repomd.sh, check-rpm-signed.sh, check-release-pkg.sh; throwaway keys; no skip in CI)
         run: scripts/test_verify.sh
+  check-fedora:
+    # The same release-package self-test with the rpm of the target (Fedora 45, rpm 6.1): only here can a %preuntrans package be built and refused (NEED_NEW_RPM=1: no skip).
+    runs-on: ubuntu-24.04
+    container: registry.fedoraproject.org/fedora:45@sha256:e203b4174f6a2ce6c160ddc4917d85e6bfce32dfc610d953b355d63ec4c17909
+    timeout-minutes: 15
+    steps:
+      - name: Tools
+        run: dnf -y -q install rpm rpm-build rpm-sign gnupg2 cpio git tar findutils
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Self-test of the key scripts with a new rpm (mode, owner, flags, dependencies, %preuntrans counter-tests; no skip)
+        run: NEED_NEW_RPM=1 scripts/test_verify.sh
