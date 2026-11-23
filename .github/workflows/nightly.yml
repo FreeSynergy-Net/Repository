@@ -68,7 +68,7 @@ jobs:
         name: main or an ancestor of main, else stop
         env:
           REF: ${{ inputs.ref }}
-        run: echo "sha=$(scripts/nightly-check-ref.sh src "$REF")" >> "$GITHUB_OUTPUT"
+        run: scripts/nightly-resolve.sh src "$REF" >> "$GITHUB_OUTPUT"   # fails the step (rc != 0) and writes nothing on any refusal
   build:
     needs: check
     name: build ${{ matrix.arch }}
@@ -81,6 +81,12 @@ jobs:
           - { arch: x86_64, runner: ubuntu-24.04, triple: x86_64-unknown-linux-gnu }
           - { arch: aarch64, runner: ubuntu-24.04-arm, triple: aarch64-unknown-linux-gnu }
     steps:
+      - name: Stop unless the verified commit is a full SHA (an empty ref would build the default branch head)
+        env:
+          SHA: ${{ needs.check.outputs.sha }}
+        run: |
+          set -euo pipefail
+          [[ $SHA =~ ^[0-9a-f]{40}$ ]] || { echo "::error::no verified commit SHA from job check"; exit 1; }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
