@@ -11,8 +11,7 @@ apt/freesynergy.sources                     fertige deb822-Datei
 apt/freesynergy-archive-keyring.{pgp,asc}   öffentlicher Schlüssel (binär für Signed-By, ASCII für Menschen)
 apt/dists/<suite>/{Release,InRelease,Release.gpg}
 rpm/RPM-GPG-KEY-freesynergy                 öffentlicher Schlüssel (derselbe wie bei apt)
-rpm/stable/{*.rpm,repodata/}                dnf-Kanal = Releases; repodata/repomd.xml.asc = abgetrennte Signatur (repo_gpgcheck=1)
-rpm/nightly/{*.rpm,repodata/}               dnf-Kanal = Vorabversionen
+rpm/stable/{*.rpm,repodata/}                der EINE dnf-Kanal = alle Releases mit Versions-Tag, auch Vorabversionen (nie ein ungetaggter Bau); repodata/repomd.xml.asc = abgetrennte Signatur (repo_gpgcheck=1)
 apt/dists/<suite>/main/binary-amd64/Packages{,.gz,.xz}
 apt/pool/<suite>/<prefix>/<paket>/<paket>_<version>_<arch>.deb
 ```
@@ -49,12 +48,14 @@ Standardmäßig hat `Release` kein `Valid-Until`, das Repo läuft für Clients n
 
 ## rpm-Kanal
 
-`freesynergy-release` (gebaut mit `fs-blueprint package release --fingerprint <festgelegter FPR> --pages-url https://freesynergy-net.github.io/Repository`) zeigt dnf auf `<pages>/rpm/stable` (aktiv) und `<pages>/rpm/nightly` (aus), mit `gpgcheck=1` und `repo_gpgcheck=1`.
+`freesynergy-release` (gebaut mit `fs-blueprint package release --fingerprint <festgelegter FPR> --pages-url https://freesynergy-net.github.io/Repository`) zeigt dnf auf `<pages>/rpm/stable` (EINE Sektion `[freesynergy]`, `name=FreeSynergy`, aktiv), mit `gpgcheck=1` und `repo_gpgcheck=1`.
 
 Erstinstallation immer in dieser Reihenfolge: `<pages>/rpm/RPM-GPG-KEY-freesynergy` holen, Fingerabdruck vergleichen (`16A4 A3EE 563A EF51 FCF0 C55D ED7B 57C4 A190 4342`), `rpm --import`, dann `dnf install --setopt=localpkg_gpgcheck=1 <pages>/rpm/freesynergy-release.noarch.rpm` (Fedora prüft die Signatur lokaler/URL-Pakete sonst nicht, ein fehlender Schlüsselimport fiele nicht auf). Die Version von `freesynergy-release` folgt der fs-blueprint-Version; bei Schlüssel- oder URL-Wechsel MUSS `--pkg-version` im Job `release-pkg` von `publish.yml` erhöht werden.
 Die Reihenfolge ist wichtig, weil das Signieren eines Pakets dessen Prüfsumme ändert: `fetch-releases.sh` (`FETCH_EXT=rpm`) -> `sign-rpm.sh ... packages DIR` (rpmsign, Schlüssel-Job) ->
-`build-rpm.sh RPMDIR stable|nightly OUTDIR` (repodata mit `createrepo_rs` 0.1.9, GPL-2.0, nur CI, nie ausgeliefert; Rückfall `CREATEREPO=createrepo_c`) -> `sign-rpm.sh ... repo rpm/<kanal>` (`repomd.xml.asc`).
-`gate-createrepo.sh` vergleicht createrepo_rs mit createrepo_c an denselben RPMs und nennt das zu nutzende Werkzeug.
+`build-rpm.sh RPMDIR stable OUTDIR` (repodata mit `createrepo_c` aus dem Ubuntu-Archiv, im Schlüssel-Job) -> `sign-rpm.sh ... repo rpm/<kanal>` (`repomd.xml.asc`).
+`gate-createrepo.sh` (Job `rpm-index-gate`, OHNE Schlüssel): createrepo_rs 0.1.9 (GPL-2.0, nur CI, nie ausgeliefert) baut den Index aus den signierten Paketen neu und muss dem Index des Schlüssel-Jobs gleichen; ein Unterschied macht den Lauf rot, nichts wird veröffentlicht (kein Rückfall).
+
+Eine Freigabe je Lauf: publish.yml hat genau EINEN Job mit dem Schlüssel, `sign` (Environment `apt-signing`): rpm-Pakete, Index, repomd.xml und die apt-Suiten werden dort signiert. `scripts/check-key-jobs.sh` (check.yml, mit 5 Mutanten in `test_check_key_jobs.sh`) hält diese Form: genau ein Job mit `secrets.GPG_`, in `apt-signing`, kein `cargo install`, kein fremdes `uses:`, das Gate in `deploy.needs`. Bedrohungsmodell (ehrlich): schützt vor VERSEHEN, nicht vor jemandem, der Workflow/Toolchain/Skripte ändern kann. Noch nicht live gezeigt: der erste echte Lauf (eine Freigabe, Gate grün); `scripts/test_fetch.sh` (Rot-Test: getaggte Releases und Vorabversionen kommen hinein, das ungetaggte `nightly` nie) nutzt ein vorgetäuschtes `gh`, kein Netz.
 Lokales Gate (podman, Wegwerf-Fedora-Container, Wegwerf-Schlüssel nur darin): `scripts/test-rpm-container.sh RPMDIR`. Es prüft: Installation klappt; manipuliertes Paket, manipuliertes repomd.xml und unsigniertes Paket werden aus dem richtigen Grund abgelehnt;
 Verzeichniseigentum je Paket samt Requires-Kette (`unowned-dirs.sh`, Befund UNOWNED bleibt benannt sichtbar); rpmlint (jedes E = rot, W erlaubt).
 
@@ -62,7 +63,7 @@ Verzeichniseigentum je Paket samt Requires-Kette (`unowned-dirs.sh`, Befund UNOW
 ### Nightly (Testbauten ohne Tag)
 
 `nightly.yml` (Entwurf, von einer Person per `workflow_dispatch` gestartet: `repo`, `ref` = `main` oder eine volle Commit-SHA, die Vorfahr von origin/main ist (Branches und Tags werden im ersten Job vor Bau und Signatur abgelehnt; `scripts/nightly-check-ref.sh`, Test `scripts/test_nightly_ref.sh`), `package`, `bins`, `key_ref`) baut EIN Repository in der CI (ohne Secrets). Der Job `sign` prüft vor dem ersten Secret nochmals, dass der gebaute Commit (jeder Bau schreibt ihn auf) dem geprüften entspricht (`scripts/nightly-verify-built.sh`). Signiert wird in der Umgebung `apt-signing` (dieselben Secrets, nichts Neues). Danach liegen die rpm-Dateien samt `.rpm.asc` im rollenden Vorab-Release `nightly` dieses Repositorys (3 Versionen je Paket und Architektur, `scripts/nightly-retain.sh`).
-Version: `<nächste>~nightly.<UTC-Zeit>.g<sha7>` (`scripts/nightly-version.sh`; sortiert nach der letzten und vor der nächsten Release). `publish.yml` nimmt dieses Release in `rpm/nightly` auf (der Kanal ist beim Nutzer standardmäßig aus). Nie geht etwas lokal Gebautes hinein.
+Version: `<nächste>~nightly.<UTC-Zeit>.g<sha7>` (`scripts/nightly-version.sh`; sortiert nach der letzten und vor der nächsten Release). `publish.yml` nimmt es NICHT auf (nur Releases mit Versions-Tag kommen in den einen Kanal `rpm/stable`): es ist ein Download für Tester. Nie geht etwas lokal Gebautes hinein.
 Die Prüfung des Schlüssels nutzt `scripts/pubkey.sh` (genau ein Primärschlüssel, der festgelegte Fingerabdruck), die Signaturprüfung `scripts/check-rpm-signed.sh` (`rpm -K` allein meldet für ein UNSIGNIERTES Paket Erfolg; verlangt wird der Text `digests signatures OK`). Vor dem Signieren von `freesynergy-release` läuft `scripts/check-release-pkg.sh` (eigener Job `release-check` OHNE Environment und Secrets; das Paket wird nie entpackt: der Payload wird aufgelistet und muss genau Schlüsseldatei und Repo-Datei als reguläre Dateien enthalten, dann wird jede nach stdout gelesen; beide Dateien exakt root:root, 0644 mit den erwarteten Flags (Repo-Datei `%config(noreplace)`); keine Scriptlets, Trigger, Obsoletes oder Conflicts, soweit der prüfende rpm sie kennt: `release-check` läuft in einem per Digest festgelegten Fedora-45-Container (rpm 6.1, kennt auch `%preuntrans`/`%postuntrans`); das Skript lehnt einen rpm ohne diese Tags ab; keine Abhängigkeiten außer `rpmlib()` und den eigenen `config()`/Namens-Provides; der Schlüssel ist der festgelegte Primärschlüssel; die Repo-Datei hat eine strenge Zeilenform (keine Fortsetzungszeilen, keine Leerzeichen um `=`) und genau die erwarteten `baseurl`, `enabled`, `gpgcheck`, `repo_gpgcheck`, `gpgkey`). Der Schlüssel-Job `rpm-packages` vergleicht nur die sha256 des Pakets mit der von `release-check` freigegebenen.
 
 ## GitHub Pages einschalten (Eigentümer, einmalig; nicht durch Agenten)

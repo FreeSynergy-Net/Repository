@@ -1,12 +1,13 @@
 # DRAFT - never run yet (rpm part: gate only run locally in a container, see docs/en/README.md). A person triggers it (workflow_dispatch) after the strategy decision to publish; nothing runs on push.
-# Three jobs: build (no secrets) -> sign (environment apt-signing, secrets only there, no foreign code) -> deploy (Pages).
+# Jobs: build, release-pkg, release-check (no secrets) -> sign (ONE job with the key, environment apt-signing: ONE approval per run; createrepo_c from the Ubuntu archive) -> rpm-index-gate (createrepo_rs, NO key) -> deploy (needs both).
 # The site is rebuilt completely from the signed releases (stateless; the releases stay the source of truth). Both suites are rebuilt,
 # because a Pages deploy replaces the whole site.
 # Pins: all actions by commit SHA, each checked against its tag with gh api on 2026-11-23 (annotated tags dereferenced). No placeholder is left.
 # APT signing: the fs-release action sign-apt is NOT merged in fs-release (not on main, in no tag; v0.0.7 does not contain it), so it is not used: job sign calls scripts/sign-apt.sh itself (temporary GNUPGHOME, same pattern as the rpm jobs).
-# rpm channel (rpm/stable = releases, rpm/nightly = pre-releases): build -> rpm-packages (key) -> rpm-index (no key, createrepo_rs gated against createrepo_c) -> rpm-sign (key) -> site.
-# freesynergy-release: job release-pkg builds it (no secrets, fs-blueprint at BLUEPRINT_SHA), rpm-packages signs it, rpm-sign checks it and puts it at rpm/freesynergy-release.noarch.rpm (also in rpm/stable).
-# Version of freesynergy-release = fs-blueprint version; when the key or the Pages URL changes, --pkg-version MUST be raised in job release-pkg.
+# rpm channel: ONE channel rpm/stable = all version-tagged releases and pre-releases (never an untagged build). sign: packages -> index (createrepo_c) -> repomd.xml -> site; rpm-index-gate then checks the index with createrepo_rs.
+# freesynergy-release: job release-pkg builds it (no secrets, fs-blueprint at BLUEPRINT_SHA), release-check checks it (no secrets), sign signs it and puts it at rpm/freesynergy-release.noarch.rpm (also in rpm/stable).
+# Version of freesynergy-release = fs-blueprint version; when the key, the Pages URL or the repo file changes, --pkg-version MUST be raised in job release-pkg.
+# Threat model (honest): the one-key-job rule protects against MISTAKES, not against someone who can change the workflow, the toolchain or the scripts. A person approves every run (environment); scripts/check-key-jobs.sh keeps the shape.
 # It uses the same environment apt-signing and the same two secrets; nothing new is created. The rpm steps below use the key only through scripts/sign-rpm.sh.
 #   upload-pages-artifact    = v5.0.0 fc324d3547104276b827a68afc52ff2a11cc49c9
 #   deploy-pages             = v5.0.1 368f82528645a54fb793d4d04e342629a3f51346
@@ -17,7 +18,7 @@ on:
     inputs:
       repos:
         description: "Space separated FreeSynergy repos whose releases carry .deb files (names fs-<category>)"
-        default: "fs-zentinel fs-kanidm"
+        default: "fs-starter"
       key_ref:
         description: "Commit SHA of fs-release from which release-signing-key.asc is read (reviewed commit, not a branch)"
         required: true
@@ -32,8 +33,8 @@ env:
   BASE_URL: "https://freesynergy-net.github.io/Repository/apt/"
   KEY_REF: ${{ inputs.key_ref }}
   PAGES_URL: "https://freesynergy-net.github.io/Repository"
-  # fs-blueprint source (ONE line to change: BLUEPRINT_SHA below): only a commit that is on main of fs-release may be pinned; 1932e8e is the main commit of fs-release with package-rpm-r2 (never a branch head).
-  BLUEPRINT_SHA: "1932e8edafbe4b17c86675a2379cda1a9cedff51"
+  # fs-blueprint source (ONE line to change: BLUEPRINT_SHA below): only a commit that is on main of fs-release may be pinned; 2169c24 is main of fs-release with the ONE-channel repo file (checked with git/gh on 2026-11-23).
+  BLUEPRINT_SHA: "2169c2429f3e69739bdf2b42575101589c0e6468"
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -63,7 +64,7 @@ jobs:
             if compgen -G "debs-$suite/*.deb" > /dev/null; then scripts/build-apt.sh --arch amd64,arm64 "debs-$suite" "$suite" repo; else echo "no .deb for $suite"; fi
           done
           test -d repo/dists || { echo "::error::nothing to publish"; exit 1; }
-      - name: Fetch signed .rpm files (stable = releases, nightly = pre-releases); packages may be missing, then that channel stays empty
+      - name: Fetch signed .rpm files (ONE channel = all version-tagged releases AND pre-releases; the rolling untagged `nightly` never goes in); packages may be missing, then the channel holds only freesynergy-release
         env:
           GH_TOKEN: ${{ github.token }}
           REPOS: ${{ inputs.repos }}
@@ -71,11 +72,8 @@ jobs:
         run: |
           set -euo pipefail
           read -r -a repos <<< "$REPOS"
-          for pair in stable:stable nightly:testing; do
-            extra=(); [[ ${pair%%:*} == nightly ]] && extra=(Repository)   # the rolling pre-release `nightly` of nightly.yml (this repository)
-            scripts/fetch-releases.sh "${pair#*:}" "rpms/${pair%%:*}" "$RUNNER_TEMP/key.asc" "$KEY_FPR" "${repos[@]}" "${extra[@]}"
-          done
-          echo "stable nightly" > rpms/CHANNELS   # marker: rpm-src always exists, also when no repo has a .rpm (the apt part must not fail for that)
+          scripts/fetch-releases.sh all rpms/stable "$RUNNER_TEMP/key.asc" "$KEY_FPR" "${repos[@]}"   # only tags v<digit>... (tested: scripts/test_fetch.sh)
+          echo stable > rpms/CHANNELS   # marker: rpm-src always exists, also when no repo has a .rpm (the apt part must not fail for that)
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: apt-unsigned
@@ -88,7 +86,7 @@ jobs:
           retention-days: 3
           if-no-files-found: ignore
   release-pkg:
-    # freesynergy-release (dnf source + public key), built here from the pinned fs-blueprint; NO secrets. Signed later in rpm-packages (after this job).
+    # freesynergy-release (dnf source + public key), built here from the pinned fs-blueprint; NO secrets. Signed later in job sign.
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -151,17 +149,30 @@ jobs:
           files=(release-pkg/freesynergy-release-*.noarch.rpm); test "${#files[@]}" = 1; test "$(ls -A release-pkg | wc -l)" = 1
           scripts/check-release-pkg.sh "${files[0]}" "$KEY_FPR" "$PAGES_URL"
           echo "sha=$(sha256sum "${files[0]}" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-  rpm-packages:
+  sign:
+    # THE ONE job with the key (environment apt-signing = ONE approval per run). Only code that is already trusted runs here: actions/* and fs-release, the Ubuntu
+    # archive (rpm, gnupg, createrepo-c: the same trust level as the rpm and gnupg this job needs anyway) and our own scripts. NO cargo install, NO foreign `uses:`.
+    # createrepo_rs (third-party Rust code) is NOT here: it runs afterwards in job rpm-index-gate WITHOUT the key and must produce the same index.
+    # scripts/check-key-jobs.sh (check.yml) keeps this shape: exactly one job with secrets.GPG_, it is in apt-signing, nothing foreign in it.
+    # Threat model (honest): it protects against MISTAKES, not against someone who can change the workflow, the toolchain or the scripts.
     needs: [build, release-check]
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
+    # Secrets GPG_PRIVATE_KEY (ONLY the signing subkey: gpg --export-secret-subkeys) and GPG_PASSPHRASE live in this environment only
+    # (Settings > Environments > apt-signing: deployment branch rule main, required reviewer = owner). Signing fails without the key.
     environment: apt-signing
     permissions:
       contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: apt-unsigned
+          path: repo
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: rpm-src
@@ -178,112 +189,9 @@ jobs:
           [[ $CHECKED_SHA =~ ^[0-9a-f]{64}$ ]] || { echo "::error::no sha256 from release-check"; exit 1; }
           files=(rpms/stable/freesynergy-release-*.noarch.rpm); test "${#files[@]}" = 1
           [[ $(sha256sum "${files[0]}" | cut -d' ' -f1) == "$CHECKED_SHA" ]] || { echo "::error::freesynergy-release differs from the checked package"; exit 1; }
-      - name: Sign every package with the signing subkey (temporary GNUPGHOME; no foreign code runs here)
-        env:
-          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-        run: |
-          set -euo pipefail
-          sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends rpm gnupg
-          export GNUPGHOME=$RUNNER_TEMP/gh; mkdir -m700 "$GNUPGHOME"; umask 077
-          printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import 2> /dev/null; printf '%s' "$GPG_PASSPHRASE" > "$RUNNER_TEMP/pp"
-          for d in rpms/*/; do compgen -G "$d*.rpm" > /dev/null && scripts/sign-rpm.sh --passphrase-file "$RUNNER_TEMP/pp" --key "$KEY_FPR" packages "$d"; done
-          shred -u "$RUNNER_TEMP/pp"; gpgconf --kill gpg-agent || true
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: rpm-signed
-          path: rpms
-          retention-days: 3
-          if-no-files-found: ignore
-  rpm-index:
-    # No secrets here: the metadata tool is third-party code (createrepo_rs 0.1.9, GPL-2.0, CI only, never shipped).
-    needs: rpm-packages
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: rpm-signed
-          path: rpms
-      - name: Tools and gate (createrepo_rs result must equal createrepo_c, else fall back to createrepo_c)
-        run: |
-          set -euo pipefail
-          sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends createrepo-c libxml2-utils xz-utils zstd
-          cargo install createrepo_rs --version =0.1.9 --locked --root "$RUNNER_TEMP/tools"
-          export PATH=$RUNNER_TEMP/tools/bin:$PATH
-          tool=createrepo_rs   # gate EVERY channel that has packages; one difference switches all channels to createrepo_c; a channel without .rpm is skipped
-          for d in rpms/*/; do compgen -G "$d*.rpm" > /dev/null || { echo "no .rpm in $d, skipped"; continue; }; [[ $(scripts/gate-createrepo.sh "$d") == createrepo_rs ]] || tool=createrepo_c; done
-          echo "CREATEREPO=$tool" >> "$GITHUB_ENV"; echo "createrepo tool: $tool"
-          for d in rpms/*/; do ch=$(basename "$d"); compgen -G "$d*.rpm" > /dev/null || continue; CREATEREPO=$tool scripts/build-rpm.sh "$d" "$ch" rpm-tree; done
-          test -d rpm-tree/rpm || { echo "::error::no rpm channel built"; exit 1; }
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: rpm-unsigned-repo
-          path: rpm-tree
-          retention-days: 3
-  rpm-sign:
-    needs: rpm-index
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    environment: apt-signing
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: rpm-unsigned-repo
-          path: rpm-tree
-      - name: Sign repomd.xml of every channel (repo_gpgcheck), assemble the public key
-        env:
-          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends gnupg
-          export GNUPGHOME=$RUNNER_TEMP/gh; mkdir -m700 "$GNUPGHOME"; umask 077
-          printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import 2> /dev/null; printf '%s' "$GPG_PASSPHRASE" > "$RUNNER_TEMP/pp"
-          for d in rpm-tree/rpm/*/; do scripts/sign-rpm.sh --passphrase-file "$RUNNER_TEMP/pp" --key "$KEY_FPR" repo "$d"; done
-          shred -u "$RUNNER_TEMP/pp"; gpgconf --kill gpg-agent || true
-          [[ $KEY_REF =~ ^[0-9a-f]{40}$ ]] || { echo "::error::key_ref must be a full commit SHA"; exit 1; }
-          gh api "repos/FreeSynergy-Net/fs-release/contents/release-signing-key.asc?ref=$KEY_REF" --jq .content | base64 -d > "$RUNNER_TEMP/raw.asc"
-          scripts/pubkey.sh "$RUNNER_TEMP/raw.asc" "$KEY_FPR" rpm-tree/rpm/RPM-GPG-KEY-freesynergy
-          # verify against the PUBLISHED public key and the pinned fingerprint (own empty GNUPGHOME), not against the secret key just imported
-          for d in rpm-tree/rpm/*/; do scripts/verify-repomd.sh rpm-tree/rpm/RPM-GPG-KEY-freesynergy "$KEY_FPR" "$d/repodata/repomd.xml" "$d/repodata/repomd.xml.asc" || { echo "::error::repomd signature check failed in $d"; exit 1; }; done
-          # freesynergy-release: signed with the same key, checked with a temporary rpm database, placed under its fixed name
-          sudo apt-get install -y -q --no-install-recommends rpm
-          rpm --dbpath "$RUNNER_TEMP/rdb" --import rpm-tree/rpm/RPM-GPG-KEY-freesynergy
-          cp rpm-tree/rpm/stable/freesynergy-release-*.noarch.rpm rpm-tree/rpm/freesynergy-release.noarch.rpm
-          scripts/check-rpm-signed.sh --dbpath "$RUNNER_TEMP/rdb" rpm-tree/rpm/freesynergy-release.noarch.rpm   # plain rpm check exits 0 for an UNSIGNED package; this needs "digests signatures OK"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: rpm-site
-          path: rpm-tree
-          retention-days: 3
-  sign:
-    needs: [build, rpm-sign]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    # Secrets GPG_PRIVATE_KEY (ONLY the signing subkey: gpg --export-secret-subkeys) and GPG_PASSPHRASE live in this environment only
-    # (Settings > Environments > apt-signing: deployment branch rule main, required reviewer = owner). sign-apt fails without the key.
-    environment: apt-signing
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: apt-unsigned
-          path: repo
-      - name: Sign every suite (InRelease + Release.gpg; scripts/sign-apt.sh, key only in a temporary GNUPGHOME of this job)
+      - name: Tools from the Ubuntu archive
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends rpm gnupg createrepo-c xz-utils
+      - name: Sign the rpm packages (temporary GNUPGHOME, removed at the end of the step), index with createrepo_c, sign repomd.xml
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
@@ -292,21 +200,37 @@ jobs:
           test -n "$GPG_PRIVATE_KEY" || { echo "::error::GPG_PRIVATE_KEY is empty - refusing to continue unsigned"; exit 1; }
           export GNUPGHOME=$RUNNER_TEMP/gh; mkdir -m700 "$GNUPGHOME"; umask 077
           printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import 2> /dev/null; printf '%s' "$GPG_PASSPHRASE" > "$RUNNER_TEMP/pp"
-          for d in repo/dists/*/; do scripts/sign-apt.sh --passphrase-file "$RUNNER_TEMP/pp" --key "$KEY_FPR" repo "$(basename "$d")"; done
-          shred -u "$RUNNER_TEMP/pp"; gpgconf --kill gpg-agent || true
-      - name: Verify against the public key (nothing secret is printed), assemble the site
+          compgen -G "rpms/stable/*.rpm" > /dev/null || { echo "::error::no .rpm for the channel"; exit 1; }
+          scripts/sign-rpm.sh --passphrase-file "$RUNNER_TEMP/pp" --key "$KEY_FPR" packages rpms/stable          # 1. packages (signing changes the checksum)
+          CREATEREPO=createrepo_c scripts/build-rpm.sh rpms/stable stable rpm-tree                               # 2. index of the SIGNED packages
+          scripts/sign-rpm.sh --passphrase-file "$RUNNER_TEMP/pp" --key "$KEY_FPR" repo rpm-tree/rpm/stable     # 3. repomd.xml
+          shred -u "$RUNNER_TEMP/pp"; gpgconf --kill gpg-agent || true; rm -rf "$GNUPGHOME"
+      - name: Sign every apt suite (InRelease + Release.gpg; scripts/sign-apt.sh)
         env:
-          GH_TOKEN: ${{ github.token }}
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          test -n "$GPG_PRIVATE_KEY" || { echo "::error::GPG_PRIVATE_KEY is empty - refusing to continue unsigned"; exit 1; }
+          export GNUPGHOME=$RUNNER_TEMP/gh2; mkdir -m700 "$GNUPGHOME"; umask 077
+          printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import 2> /dev/null; printf '%s' "$GPG_PASSPHRASE" > "$RUNNER_TEMP/pp"
+          for d in repo/dists/*/; do scripts/sign-apt.sh --passphrase-file "$RUNNER_TEMP/pp" --key "$KEY_FPR" repo "$(basename "$d")"; done
+          shred -u "$RUNNER_TEMP/pp"; gpgconf --kill gpg-agent || true; rm -rf "$GNUPGHOME"
+      - name: Verify against the PUBLISHED public key and the pinned fingerprint (own empty GNUPGHOME, nothing secret is printed), assemble the site
         run: |
           set -euo pipefail
           [[ $KEY_REF =~ ^[0-9a-f]{40}$ ]] || { echo "::error::key_ref must be a full commit SHA"; exit 1; }
-          gh api "repos/FreeSynergy-Net/fs-release/contents/release-signing-key.asc?ref=$KEY_REF" --jq .content | base64 -d > "$RUNNER_TEMP/key.asc"
+          gh api "repos/FreeSynergy-Net/fs-release/contents/release-signing-key.asc?ref=$KEY_REF" --jq .content | base64 -d > "$RUNNER_TEMP/raw.asc"
+          scripts/pubkey.sh "$RUNNER_TEMP/raw.asc" "$KEY_FPR" "$RUNNER_TEMP/key.asc"
+          scripts/pubkey.sh "$RUNNER_TEMP/raw.asc" "$KEY_FPR" rpm-tree/rpm/RPM-GPG-KEY-freesynergy
+          scripts/verify-repomd.sh rpm-tree/rpm/RPM-GPG-KEY-freesynergy "$KEY_FPR" rpm-tree/rpm/stable/repodata/repomd.xml rpm-tree/rpm/stable/repodata/repomd.xml.asc || { echo "::error::repomd signature check failed"; exit 1; }
+          # freesynergy-release: signed with the same key, checked with a temporary rpm database, placed under its fixed name
+          rpm --dbpath "$RUNNER_TEMP/rdb" --import rpm-tree/rpm/RPM-GPG-KEY-freesynergy
+          cp rpm-tree/rpm/stable/freesynergy-release-*.noarch.rpm rpm-tree/rpm/freesynergy-release.noarch.rpm
+          scripts/check-rpm-signed.sh --dbpath "$RUNNER_TEMP/rdb" rpm-tree/rpm/freesynergy-release.noarch.rpm   # plain rpm check exits 0 for an UNSIGNED package; this needs "digests signatures OK"
           for d in repo/dists/*/; do scripts/verify-apt.sh --fingerprint "$KEY_FPR" repo "$(basename "$d")" "$RUNNER_TEMP/key.asc"; done
           scripts/make-site.sh repo site "$RUNNER_TEMP/key.asc" "$BASE_URL" "$KEY_FPR"
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: rpm-site
-          path: site
+          mkdir -p site/rpm; cp -a rpm-tree/rpm/. site/rpm/
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: apt-site
@@ -316,9 +240,29 @@ jobs:
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: site
+  rpm-index-gate:
+    # NO environment, NO secrets, no permission beyond contents: read. createrepo_rs (0.1.9, GPL-2.0, third-party Rust code, CI only, never shipped) rebuilds the index
+    # from the SIGNED packages of the site and must equal the index of job sign. A difference makes the run red; deploy needs this job, so nothing is published.
+    needs: sign
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: apt-site
+          path: site
+      - name: createrepo_rs against the index of the key job
+        run: |
+          set -euo pipefail
+          sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends libxml2-utils xz-utils zstd
+          cargo install createrepo_rs --version =0.1.9 --locked --root "$RUNNER_TEMP/tools"
+          PATH=$RUNNER_TEMP/tools/bin:$PATH scripts/gate-createrepo.sh site/rpm/stable
   deploy:
     # DRAFT: Pages deploy, not executed. Needs Settings > Pages > Source = GitHub Actions (owner decision).
-    needs: sign
+    needs: [sign, rpm-index-gate]
     if: ${{ inputs.deploy }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10

@@ -19,6 +19,14 @@ jobs:
         run: shellcheck scripts/*.sh
       - name: Nightly ref gate (main / ancestor accepted; branch, tag, foreign commit refused)
         run: scripts/test_nightly_ref.sh
+      - name: Key job shape (exactly ONE job with secrets.GPG_ in apt-signing, nothing foreign in it, gate in deploy.needs; protects against MISTAKES, not against someone who can change the workflow, the toolchain or the scripts)
+        run: |
+          set -euo pipefail
+          scripts/check-key-jobs.sh .github/workflows/publish.yml rpm-index-gate
+          scripts/check-key-jobs.sh .github/workflows/nightly.yml
+          scripts/test_check_key_jobs.sh
+      - name: Red test fetch-releases (tagged releases and pre-releases in, the untagged nightly never)
+        run: scripts/test_fetch.sh
       - name: Self-test (retention, build, sign, verify, counter-checks)
         run: |
           set -euo pipefail

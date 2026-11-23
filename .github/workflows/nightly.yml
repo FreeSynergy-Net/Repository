@@ -1,8 +1,8 @@
 # DRAFT - never run. A person triggers it (workflow_dispatch); nothing runs on push, schedule or tag.
 # Only reviewed code is ever signed with the project key: `ref` is `main` or a full commit SHA that is an ancestor of origin/main of the source repo (scripts/nightly-check-ref.sh,
 # job `check`, first job, no secrets, BEFORE build and sign). Branches and tags are refused.
-# Test build of ONE FreeSynergy repo at a branch or main, WITHOUT a tag: signed rpm files for the dnf channel `nightly` (off by default at the user:
-# /etc/yum.repos.d/freesynergy.repo, [freesynergy-nightly] enabled=0). Version <next>~nightly.<UTC stamp>.g<sha7> (scripts/nightly-version.sh).
+# Test build of ONE FreeSynergy repo at a branch or main, WITHOUT a tag: signed rpm files in the rolling pre-release `nightly` of this repository. A download only: it is NOT in the dnf channel
+# (publish.yml takes only version-tagged releases). Version <next>~nightly.<UTC stamp>.g<sha7> (scripts/nightly-version.sh).
 # Three jobs: build (no secrets) -> sign (environment apt-signing, the existing secrets GPG_PRIVATE_KEY / GPG_PASSPHRASE, nothing new) -> upload (no secrets, only contents: write).
 # Only CI-built files go in: nothing built locally is ever uploaded. The files land on the rolling pre-release `nightly` of THIS repository (3 versions per package and
 # architecture, scripts/nightly-retain.sh); the next run of publish.yml (also by a person) puts them into rpm/nightly of the dnf repository.

@@ -10,15 +10,14 @@ apt/dists/<suite>/{Release,InRelease,Release.gpg}
 apt/dists/<suite>/main/binary-amd64/Packages{,.gz,.xz}
 apt/pool/<suite>/<prefix>/<package>/<package>_<version>_<arch>.deb
 rpm/RPM-GPG-KEY-freesynergy                 public key (same key as apt)
-rpm/stable/{*.rpm,repodata/}                dnf channel = releases; repodata/repomd.xml.asc = detached signature (repo_gpgcheck=1)
-rpm/nightly/{*.rpm,repodata/}               dnf channel = pre-releases
+rpm/stable/{*.rpm,repodata/}                the ONE dnf channel = all version-tagged releases and pre-releases (never an untagged build); repodata/repomd.xml.asc = detached signature (repo_gpgcheck=1)
 ```
 
-`freesynergy-release` (built by `fs-blueprint package release --fingerprint <pinned FPR> --pages-url https://freesynergy-net.github.io/Repository`) points dnf at `<pages>/rpm/stable` (enabled) and `<pages>/rpm/nightly` (disabled) with `gpgcheck=1` and `repo_gpgcheck=1`.
+`freesynergy-release` (built by `fs-blueprint package release --fingerprint <pinned FPR> --pages-url https://freesynergy-net.github.io/Repository`) points dnf at `<pages>/rpm/stable` (ONE section `[freesynergy]`, `name=FreeSynergy`, enabled) with `gpgcheck=1` and `repo_gpgcheck=1`.
 
 First install, always in this order: fetch `<pages>/rpm/RPM-GPG-KEY-freesynergy`, compare the fingerprint (`16A4 A3EE 563A EF51 FCF0 C55D ED7B 57C4 A190 4342`), `rpm --import`, then `dnf install --setopt=localpkg_gpgcheck=1 <pages>/rpm/freesynergy-release.noarch.rpm` (Fedora does not check the signature of local or URL packages by default, so without that option an unimported key is not noticed). The version of `freesynergy-release` follows the fs-blueprint version; when the key or the Pages URL changes, `--pkg-version` MUST be raised in the `release-pkg` job of `publish.yml`.
 
-Suites: `stable` (= releases), `testing` (= pre-releases). Architectures `amd64` and `arm64` indexed. Retention: 3 versions per package and architecture and suite.
+apt suites (rpm has ONE channel, see above; apt is not merged to one suite yet): `stable` (= releases), `testing` (= pre-releases). Architectures `amd64` and `arm64` indexed. Retention: 3 versions per package and architecture and suite.
 A later mirror (Codeberg Pages, own domain) is the same tree; trust sits in the signature, not in the place (ADR 0062).
 
 ## How it is built
@@ -53,14 +52,17 @@ By default `Release` has no `Valid-Until`, so the repository never expires for c
 ## rpm channel
 
 Order matters, because signing a package changes its checksum: `fetch-releases.sh` (`FETCH_EXT=rpm`) -> `sign-rpm.sh ... packages DIR` (rpmsign, key job) ->
-`build-rpm.sh RPMDIR stable|nightly OUTDIR` (repodata by `createrepo_rs` 0.1.9, GPL-2.0, CI only, never shipped; `CREATEREPO=createrepo_c` is the fallback) ->
-`sign-rpm.sh ... repo rpm/<channel>` (`repomd.xml.asc`). `gate-createrepo.sh` compares createrepo_rs against createrepo_c on the same rpms and prints the tool to use.
+`build-rpm.sh RPMDIR stable OUTDIR` (repodata by `createrepo_c` from the Ubuntu archive, in the key job) ->
+`sign-rpm.sh ... repo rpm/<channel>` (`repomd.xml.asc`). `gate-createrepo.sh` (job `rpm-index-gate`, NO key): createrepo_rs 0.1.9 (GPL-2.0, CI only, never shipped) rebuilds the index from the signed packages and must equal the index of the key job; a difference makes the run red and nothing is deployed (no fallback).
+
+One approval per run: publish.yml has exactly ONE job with the key, `sign` (environment `apt-signing`): rpm packages, index, repomd.xml and the apt suites are signed there. `scripts/check-key-jobs.sh` (check.yml, with 5 mutants in `test_check_key_jobs.sh`) keeps that shape: exactly one job with `secrets.GPG_`, in `apt-signing`, no `cargo install`, no foreign `uses:`, the gate in `deploy.needs`. Threat model (honest): it protects against MISTAKES, not against someone who can change the workflow, the toolchain or the scripts. Not yet shown live: the first real run (one approval, gate green); `scripts/test_fetch.sh` (red test: tagged releases and pre-releases go in, the untagged `nightly` never) uses a fake `gh`, no network.
+
 Local gate (podman, throwaway Fedora container, throwaway key only inside it): `scripts/test-rpm-container.sh RPMDIR` — install works; tampered package, tampered repomd.xml and unsigned package are refused; then the unowned-directory check (per package: itself + Requires chain, `unowned-dirs.sh`) and rpmlint (any E = red, W allowed).
 
 
 ### Nightly (test builds without a tag)
 
-`nightly.yml` (draft, started by a person with `workflow_dispatch`: `repo`, `ref` = `main` or a full commit SHA that is an ancestor of origin/main (branches and tags are refused in the first job, before build and sign; `scripts/nightly-check-ref.sh`, test `scripts/test_nightly_ref.sh`); job `sign` checks again, before it touches a secret, that the built commit (recorded by each build) equals the verified one (`scripts/nightly-verify-built.sh`), `package`, `key_ref`) builds ONE repository in CI (no secrets), signs in the environment `apt-signing` (same secrets, nothing new) and uploads the rpm files plus `.rpm.asc` to the rolling pre-release `nightly` of this repository (3 versions per package and architecture, `scripts/nightly-retain.sh`). Version: `<next>~nightly.<UTC stamp>.g<sha7>` (`scripts/nightly-version.sh`; sorts after the last and before the next release). `publish.yml` takes that release into `rpm/nightly` (the channel is off by default at the user). Nothing built locally ever goes in.
+`nightly.yml` (draft, started by a person with `workflow_dispatch`: `repo`, `ref` = `main` or a full commit SHA that is an ancestor of origin/main (branches and tags are refused in the first job, before build and sign; `scripts/nightly-check-ref.sh`, test `scripts/test_nightly_ref.sh`); job `sign` checks again, before it touches a secret, that the built commit (recorded by each build) equals the verified one (`scripts/nightly-verify-built.sh`), `package`, `key_ref`) builds ONE repository in CI (no secrets), signs in the environment `apt-signing` (same secrets, nothing new) and uploads the rpm files plus `.rpm.asc` to the rolling pre-release `nightly` of this repository (3 versions per package and architecture, `scripts/nightly-retain.sh`). Version: `<next>~nightly.<UTC stamp>.g<sha7>` (`scripts/nightly-version.sh`; sorts after the last and before the next release). `publish.yml` does NOT take it (only version-tagged releases go into the one channel `rpm/stable`): it is a download for testers. Nothing built locally ever goes in.
 
 Checks added in the same step as the signing (scripts, each with a counter-test in `test_verify.sh` / `test_nightly_ref.sh`): `check-rpm-signed.sh` (plain `rpm -K` exits 0 for an UNSIGNED package; the text `digests signatures OK` is required), `check-release-pkg.sh` (own job `release-check` WITHOUT environment and secrets, before `freesynergy-release` is signed; the package is never unpacked: its payload is listed and must hold exactly the key file and the repo file as regular files, then each is read to stdout; both files exactly root:root, 0644 with the expected flags (repo file `%config(noreplace)`); no scriptlets, triggers, obsoletes or conflicts, as far as the checking rpm knows them: `release-check` runs in a Fedora 45 container pinned by digest (rpm 6.1, which also knows `%preuntrans`/`%postuntrans`) and the script refuses an rpm without those tags; no dependencies except `rpmlib()` and the package's own `config()`/name provides; the key is the pinned primary key; the repo file has a strict line form (no continuation lines, no spaces around `=`) and exactly the expected `baseurl`, `enabled`, `gpgcheck`, `repo_gpgcheck`, `gpgkey`. The key job `rpm-packages` only compares the sha256 of the package with the one `release-check` approved), and `pubkey.sh` for the published key in `nightly.yml` as in `publish.yml`.
 
