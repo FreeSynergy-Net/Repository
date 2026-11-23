@@ -5,8 +5,8 @@
 # with --to-stdout into a temp dir (nothing the archive names is ever written). Needs: no scriptlets/triggers/obsoletes/conflicts (read with an rpm that
 # knows all scriptlet kinds of the target, see step 0); the header file list is the same two files, both root:root, 0644, flags none / %config(noreplace);
 # no dependencies except rpmlib() and the package's own config()/name provides; the key = exactly one primary key == FPR (pubkey.sh); the repo file has the strict line form (section headers and key=value
-# without spaces, no continuation lines) and its content equals the expected one: stable baseurl PAGES_URL/rpm/stable enabled, nightly baseurl
-# PAGES_URL/rpm/nightly disabled, gpgcheck=1 and repo_gpgcheck=1 in both, gpgkey = the packaged key, nothing else.
+# without spaces, no continuation lines) and its content equals the expected one: EXACTLY ONE section [freesynergy], name=FreeSynergy, baseurl PAGES_URL/rpm/stable,
+# enabled=1, gpgcheck=1, repo_gpgcheck=1, gpgkey = the packaged key, nothing else (one channel; a second section or enabled=0 is refused).
 set -euo pipefail
 rpm=${1:?usage: check-release-pkg.sh RPM FPR PAGES_URL}; fpr=${2:?}; url=${3:?}; url=${url%/}
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd); w=$(mktemp -d); trap 'rm -rf "$w"' EXIT
@@ -43,8 +43,6 @@ payload -i --to-stdout "./${Y#/}" > "$w/repo" || die "cannot read the repo file"
 got=$(awk '/^\[/ {s=$0} /^[a-z_]+=/ {print s " " $0}' "$w/repo" | sort | tr '\n' '|')
 want=$(printf '%s\n' \
   "[freesynergy] baseurl=$url/rpm/stable" "[freesynergy] enabled=1" "[freesynergy] gpgcheck=1" "[freesynergy] repo_gpgcheck=1" \
-  "[freesynergy] gpgkey=file://$K" "[freesynergy] name=FreeSynergy (stable)" \
-  "[freesynergy-nightly] baseurl=$url/rpm/nightly" "[freesynergy-nightly] enabled=0" "[freesynergy-nightly] gpgcheck=1" "[freesynergy-nightly] repo_gpgcheck=1" \
-  "[freesynergy-nightly] gpgkey=file://$K" "[freesynergy-nightly] name=FreeSynergy (nightly, for testers)" | sort | tr '\n' '|')
+  "[freesynergy] gpgkey=file://$K" "[freesynergy] name=FreeSynergy" | sort | tr '\n' '|')
 [[ $got == "$want" ]] || die "repo file differs from the expected content (baseurl/enabled/gpgcheck/repo_gpgcheck/gpgkey)"
 echo "ok: $rpm holds key $fpr and the expected repo file for $url"

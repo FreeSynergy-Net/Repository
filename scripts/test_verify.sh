@@ -21,7 +21,7 @@ echo tampered > "$w/x.xml"; "$here/verify-repomd.sh" "$w/o.asc" "$fa" "$w/x.xml"
 # check-rpm-signed.sh (S-R3: plain `rpm -K` accepts an UNSIGNED package) and check-release-pkg.sh (S-R6); needs rpmbuild + rpmsign (package rpm on Debian/Ubuntu)
 if command -v rpmbuild > /dev/null && command -v rpmsign > /dev/null; then
   U=https://x.example/Repository; R=/etc/pki/rpm-gpg/RPM-GPG-KEY-freesynergy; Y=/etc/yum.repos.d/freesynergy.repo
-  repof() { printf '[freesynergy]\nname=FreeSynergy (stable)\nbaseurl=%s/rpm/stable\nenabled=%s\ngpgcheck=%s\nrepo_gpgcheck=1\ngpgkey=file://%s\n\n[freesynergy-nightly]\nname=FreeSynergy (nightly, for testers)\nbaseurl=%s/rpm/nightly\nenabled=0\ngpgcheck=1\nrepo_gpgcheck=1\ngpgkey=file://%s\n' "$1" "$2" "$3" "$R" "$1" "$R"; }
+  repof() { printf '[freesynergy]\nname=FreeSynergy\nbaseurl=%s/rpm/stable\nenabled=%s\ngpgcheck=%s\nrepo_gpgcheck=1\ngpgkey=file://%s\n' "$1" "$2" "$3" "$R"; }
   mkrpm() { # NAME KEYFILE REPOFILE -> $w/NAME.rpm; env: EXTRA=/path (third file), UNC=1 (uncompressed payload), POST=1 (%post), PREUN=1 (%preuntrans), DEPS="Requires: ...\n", KATTR/YATTR="%attr(..)" for the key/repo file, YCFG="" (repo file without %config)
     local xi; xi="mkdir -p %{buildroot}$(dirname "${EXTRA:-/x}"); touch %{buildroot}${EXTRA:-}"$'\n'
     mkdir -p "$w/rb/$1"; cp "$2" "$w/rb/$1/key"; cp "$3" "$w/rb/$1/repo"
@@ -38,7 +38,8 @@ if command -v rpmbuild > /dev/null && command -v rpmsign > /dev/null; then
   "$c" "$w/good.rpm" "$fa" "$U" > /dev/null && ok "release pkg: key, baseurl, gpgcheck as expected" || bad "good release pkg refused"
   repof "$U/x" 1 1 > "$w/b1.repo"; mkrpm b1 "$w/pa.asc" "$w/b1.repo"; "$c" "$w/b1.rpm" "$fa" "$U" 2> /dev/null && bad "wrong baseurl accepted" || ok "wrong baseurl refused"
   repof "$U" 1 0 > "$w/b2.repo"; mkrpm b2 "$w/pa.asc" "$w/b2.repo"; "$c" "$w/b2.rpm" "$fa" "$U" 2> /dev/null && bad "gpgcheck=0 accepted" || ok "gpgcheck=0 refused"
-  awk '/nightly\]/ {n=1} n && /^enabled=0/ {print "enabled=1"; next} {print}' "$w/good.repo" > "$w/b3.repo"; mkrpm b3 "$w/pa.asc" "$w/b3.repo"; "$c" "$w/b3.rpm" "$fa" "$U" 2> /dev/null && bad "nightly enabled accepted" || ok "nightly enabled=1 refused"
+  { cat "$w/good.repo"; printf '\n[freesynergy-nightly]\nname=FreeSynergy (nightly)\nbaseurl=%s/rpm/nightly\nenabled=0\ngpgcheck=1\nrepo_gpgcheck=1\ngpgkey=file://%s\n' "$U" "$R"; } > "$w/b3.repo"; mkrpm b3 "$w/pa.asc" "$w/b3.repo"; "$c" "$w/b3.rpm" "$fa" "$U" 2> /dev/null && bad "second (nightly) section accepted" || ok "second section refused (one channel)"
+  sed 's/^enabled=1/enabled=0/' "$w/good.repo" > "$w/b7.repo"; mkrpm b7 "$w/pa.asc" "$w/b7.repo"; "$c" "$w/b7.rpm" "$fa" "$U" 2> /dev/null && bad "enabled=0 accepted" || ok "enabled=0 refused"
   EXTRA=/etc/yum.repos.d/evil mkrpm b6 "$w/pa.asc" "$w/good.repo"; "$c" "$w/b6.rpm" "$fa" "$U" 2> /dev/null && bad "extra file in package accepted" || ok "package with an extra file refused"
   mkrpm b4 "$w/ab.asc" "$w/good.repo"; "$c" "$w/b4.rpm" "$fa" "$U" 2> /dev/null && bad "second primary key in package accepted" || ok "package with two primary keys refused"
   "$here/pubkey.sh" "$w/b.asc" "$fb" "$w/pb.asc"; mkrpm b5 "$w/pb.asc" "$w/good.repo"; "$c" "$w/b5.rpm" "$fa" "$U" 2> /dev/null && bad "foreign key in package accepted" || ok "package with a foreign key refused"
