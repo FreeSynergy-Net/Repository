@@ -5,7 +5,7 @@
 #   SITE/apt/freesynergy.sources     ready-made deb822 file for BASE_URL
 #   SITE/index.html                  fingerprint and 4 setup lines
 # The key file is NOT published as is: it must contain exactly ONE primary key and that must be PRIMARY_FPR; only that key is exported.
-# Usage: make-site.sh REPO SITE PUBLIC_KEY.asc BASE_URL PRIMARY_FPR     (BASE_URL e.g. https://freesynergy.github.io/Repository/apt/)
+# Usage: make-site.sh REPO SITE PUBLIC_KEY.asc BASE_URL PRIMARY_FPR     (BASE_URL e.g. https://freesynergy-net.github.io/Repository/apt/)
 set -euo pipefail
 repo=${1:?usage: make-site.sh REPO SITE KEY.asc BASE_URL PRIMARY_FPR}; site=${2:?}; key=${3:?}; base=${4:?}; want=${5:?}
 want=${want^^}; want=${want// /}

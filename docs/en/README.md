@@ -1,6 +1,6 @@
 # Repository (English)
 
-## Layout (GitHub Pages first, `https://freesynergy.github.io/Repository/`)
+## Layout (GitHub Pages first, `https://freesynergy-net.github.io/Repository/`)
 
 ```
 index.html                                  fingerprint + links
@@ -9,7 +9,12 @@ apt/freesynergy-archive-keyring.{pgp,asc}   public key (binary for Signed-By, ar
 apt/dists/<suite>/{Release,InRelease,Release.gpg}
 apt/dists/<suite>/main/binary-amd64/Packages{,.gz,.xz}
 apt/pool/<suite>/<prefix>/<package>/<package>_<version>_<arch>.deb
+rpm/RPM-GPG-KEY-freesynergy                 public key (same key as apt)
+rpm/stable/{*.rpm,repodata/}                dnf channel = releases; repodata/repomd.xml.asc = detached signature (repo_gpgcheck=1)
+rpm/nightly/{*.rpm,repodata/}               dnf channel = pre-releases
 ```
+
+`freesynergy-release` (built by `fs-blueprint package release --pages-url https://freesynergy-net.github.io/Repository`) points dnf at `<pages>/rpm/stable` (enabled) and `<pages>/rpm/nightly` (disabled) with `gpgcheck=1` and `repo_gpgcheck=1`.
 
 Suites: `stable` (= releases), `testing` (= pre-releases). Architectures `amd64` and `arm64` indexed. Retention: 3 versions per package and architecture and suite.
 A later mirror (Codeberg Pages, own domain) is the same tree; trust sits in the signature, not in the place (ADR 0062).
@@ -42,3 +47,15 @@ By default `Release` has no `Valid-Until`, so the repository never expires for c
 - `fetch-releases.sh` and `make-site.sh` were not run against real releases (the dry run used local test builds of zentinel 26.11.2-1 and kanidmd 1.12.1-1).
 - Signing key: the secret is assumed to hold only the subkey; it expires 2027-11-07 (renew and re-publish the keyring before that).
 - Self-test and dry run (`scripts/test-container.sh`) ran in debian:13, debian:12 and ubuntu:24.04 containers: apt update/install, tampered index/InRelease refused.
+
+## rpm channel
+
+Order matters, because signing a package changes its checksum: `fetch-releases.sh` (`FETCH_EXT=rpm`) -> `sign-rpm.sh ... packages DIR` (rpmsign, key job) ->
+`build-rpm.sh RPMDIR stable|nightly OUTDIR` (repodata by `createrepo_rs` 0.1.9, GPL-2.0, CI only, never shipped; `CREATEREPO=createrepo_c` is the fallback) ->
+`sign-rpm.sh ... repo rpm/<channel>` (`repomd.xml.asc`). `gate-createrepo.sh` compares createrepo_rs against createrepo_c on the same rpms and prints the tool to use.
+Local gate (podman, throwaway Fedora container, throwaway key only inside it): `scripts/test-rpm-container.sh RPMDIR` — install works; tampered package, tampered repomd.xml and unsigned package are refused; then rpmlint.
+
+## Switching on GitHub Pages (owner, once; not done by agents)
+
+Repository `FreeSynergy-Net/Repository` > Settings > Pages > Build and deployment > Source: **GitHub Actions**. Then run the workflow `publish` (Actions > publish > Run workflow) with `deploy` ticked.
+Address afterwards: `https://freesynergy-net.github.io/Repository/` (repo setting may also be changed to an own domain later).

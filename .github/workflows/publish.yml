@@ -1,9 +1,11 @@
-# DRAFT - never run yet. A person triggers it (workflow_dispatch) after the strategy decision to publish; nothing runs on push.
+# DRAFT - never run yet (rpm part: gate only run locally in a container, see docs/en/README.md). A person triggers it (workflow_dispatch) after the strategy decision to publish; nothing runs on push.
 # Three jobs: build (no secrets) -> sign (environment apt-signing, secrets only there, no foreign code) -> deploy (Pages).
 # The site is rebuilt completely from the signed releases (stateless; the releases stay the source of truth). Both suites are rebuilt,
 # because a Pages deploy replaces the whole site.
 # Pins: all actions by commit SHA. Three values are still REPLACE_SHA on purpose and must be entered after review (check each against its tag with gh api first):
 #   fs-release sign-apt      = the commit of the merged fs-release 0.0.7 (5b0757969226212c1e4add9a2c00fcc56443f6bf is the unreviewed head; use it only after the 0.0.7 merge)
+# rpm channel (rpm/stable = releases, rpm/nightly = pre-releases): build -> rpm-packages (key) -> rpm-index (no key, createrepo_rs gated against createrepo_c) -> rpm-sign (key) -> site.
+# It uses the same environment apt-signing and the same two secrets; nothing new is created. The rpm steps below use the key only through scripts/sign-rpm.sh.
 #   upload-pages-artifact    = v5.0.0 fc324d3547104276b827a68afc52ff2a11cc49c9 (checked against the tag 2026-11-14)
 #   deploy-pages             = v5.0.1 368f82528645a54fb793d4d04e342629a3f51346 (checked against the tag 2026-11-14)
 # Repository setting to switch on: "Require actions to be pinned to a full-length commit SHA".
@@ -25,7 +27,7 @@ permissions:
   contents: read
 env:
   KEY_FPR: "16A4A3EE563AEF51FCF0C55DED7B57C4A1904342"
-  BASE_URL: "https://freesynergy.github.io/Repository/apt/"
+  BASE_URL: "https://freesynergy-net.github.io/Repository/apt/"
   KEY_REF: ${{ inputs.key_ref }}
 jobs:
   build:
@@ -42,7 +44,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ $KEY_REF =~ ^[0-9a-f]{40}$ ]] || { echo "::error::key_ref must be a full commit SHA"; exit 1; }
-          gh api "repos/FreeSynergy/fs-release/contents/release-signing-key.asc?ref=$KEY_REF" --jq .content | base64 -d > "$RUNNER_TEMP/key.asc"
+          gh api "repos/FreeSynergy-Net/fs-release/contents/release-signing-key.asc?ref=$KEY_REF" --jq .content | base64 -d > "$RUNNER_TEMP/key.asc"
       - name: Fetch signed .deb files (3 newest releases per repo and suite) and build the unsigned trees (all architectures)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -56,13 +58,124 @@ jobs:
             if compgen -G "debs-$suite/*.deb" > /dev/null; then scripts/build-apt.sh --arch amd64,arm64 "debs-$suite" "$suite" repo; else echo "no .deb for $suite"; fi
           done
           test -d repo/dists || { echo "::error::nothing to publish"; exit 1; }
+      - name: Fetch signed .rpm files (stable = releases, nightly = pre-releases); packages may be missing, then that channel stays empty
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOS: ${{ inputs.repos }}
+          FETCH_EXT: rpm
+        run: |
+          set -euo pipefail
+          read -r -a repos <<< "$REPOS"
+          for pair in stable:stable nightly:testing; do
+            scripts/fetch-releases.sh "${pair#*:}" "rpms/${pair%%:*}" "$RUNNER_TEMP/key.asc" "$KEY_FPR" "${repos[@]}"
+          done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: apt-unsigned
           path: repo
           retention-days: 3
-  sign:
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rpm-src
+          path: rpms
+          retention-days: 3
+          if-no-files-found: ignore
+  rpm-packages:
     needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: apt-signing
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: rpm-src
+          path: rpms
+      - name: Sign every package with the signing subkey (temporary GNUPGHOME; no foreign code runs here)
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends rpm gnupg
+          export GNUPGHOME=$RUNNER_TEMP/gh; mkdir -m700 "$GNUPGHOME"; umask 077
+          printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import 2> /dev/null; printf '%s' "$GPG_PASSPHRASE" > "$RUNNER_TEMP/pp"
+          for d in rpms/*/; do compgen -G "$d*.rpm" > /dev/null && scripts/sign-rpm.sh --passphrase-file "$RUNNER_TEMP/pp" --key "$KEY_FPR" packages "$d"; done
+          shred -u "$RUNNER_TEMP/pp"; gpgconf --kill gpg-agent || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rpm-signed
+          path: rpms
+          retention-days: 3
+          if-no-files-found: ignore
+  rpm-index:
+    # No secrets here: the metadata tool is third-party code (createrepo_rs 0.1.9, GPL-2.0, CI only, never shipped).
+    needs: rpm-packages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: rpm-signed
+          path: rpms
+      - name: Tools and gate (createrepo_rs result must equal createrepo_c, else fall back to createrepo_c)
+        run: |
+          set -euo pipefail
+          sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends createrepo-c libxml2-utils xz-utils zstd
+          cargo install createrepo_rs --version =0.1.9 --locked --root "$RUNNER_TEMP/tools"
+          export PATH=$RUNNER_TEMP/tools/bin:$PATH
+          first=$(ls -d rpms/*/ | head -n1); tool=$(scripts/gate-createrepo.sh "$first")
+          echo "CREATEREPO=$tool" >> "$GITHUB_ENV"; echo "createrepo tool: $tool"
+          for d in rpms/*/; do ch=$(basename "$d"); compgen -G "$d*.rpm" > /dev/null && PATH=$PATH CREATEREPO=$tool scripts/build-rpm.sh "$d" "$ch" rpm-tree; done
+          test -d rpm-tree/rpm || { echo "::error::no rpm channel built"; exit 1; }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rpm-unsigned-repo
+          path: rpm-tree
+          retention-days: 3
+  rpm-sign:
+    needs: rpm-index
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: apt-signing
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: rpm-unsigned-repo
+          path: rpm-tree
+      - name: Sign repomd.xml of every channel (repo_gpgcheck), assemble the public key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends gnupg
+          export GNUPGHOME=$RUNNER_TEMP/gh; mkdir -m700 "$GNUPGHOME"; umask 077
+          printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import 2> /dev/null; printf '%s' "$GPG_PASSPHRASE" > "$RUNNER_TEMP/pp"
+          for d in rpm-tree/rpm/*/; do scripts/sign-rpm.sh --passphrase-file "$RUNNER_TEMP/pp" --key "$KEY_FPR" repo "$d"; done
+          shred -u "$RUNNER_TEMP/pp"; gpgconf --kill gpg-agent || true
+          gh api "repos/FreeSynergy-Net/fs-release/contents/release-signing-key.asc?ref=$KEY_REF" --jq .content | base64 -d > rpm-tree/rpm/RPM-GPG-KEY-freesynergy
+          for d in rpm-tree/rpm/*/; do gpg --batch --verify "$d/repodata/repomd.xml.asc" "$d/repodata/repomd.xml" 2>&1 | grep -q "Good signature" || { echo "::error::repomd signature check failed in $d"; exit 1; }; done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rpm-site
+          path: rpm-tree
+          retention-days: 3
+  sign:
+    needs: [build, rpm-sign]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     # Secrets GPG_PRIVATE_KEY (ONLY the signing subkey: gpg --export-secret-subkeys) and GPG_PASSPHRASE live in this environment only
@@ -79,7 +192,7 @@ jobs:
           name: apt-unsigned
           path: repo
       - name: Sign every suite (InRelease + Release.gpg; fs-release action, key only in a temporary GNUPGHOME)
-        uses: FreeSynergy/fs-release/actions/sign-apt@REPLACE_SHA # fs-release 0.0.7 commit (see header)
+        uses: FreeSynergy-Net/fs-release/actions/sign-apt@REPLACE_SHA # fs-release 0.0.7 commit (see header)
         with:
           directory: repo
           private-key: ${{ secrets.GPG_PRIVATE_KEY }}
@@ -90,9 +203,13 @@ jobs:
         run: |
           set -euo pipefail
           [[ $KEY_REF =~ ^[0-9a-f]{40}$ ]] || { echo "::error::key_ref must be a full commit SHA"; exit 1; }
-          gh api "repos/FreeSynergy/fs-release/contents/release-signing-key.asc?ref=$KEY_REF" --jq .content | base64 -d > "$RUNNER_TEMP/key.asc"
+          gh api "repos/FreeSynergy-Net/fs-release/contents/release-signing-key.asc?ref=$KEY_REF" --jq .content | base64 -d > "$RUNNER_TEMP/key.asc"
           for d in repo/dists/*/; do scripts/verify-apt.sh --fingerprint "$KEY_FPR" repo "$(basename "$d")" "$RUNNER_TEMP/key.asc"; done
           scripts/make-site.sh repo site "$RUNNER_TEMP/key.asc" "$BASE_URL" "$KEY_FPR"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: rpm-site
+          path: site
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: apt-site
