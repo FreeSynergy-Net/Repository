@@ -55,6 +55,10 @@ Order matters, because signing a package changes its checksum: `fetch-releases.s
 `sign-rpm.sh ... repo rpm/<channel>` (`repomd.xml.asc`). `gate-createrepo.sh` compares createrepo_rs against createrepo_c on the same rpms and prints the tool to use.
 Local gate (podman, throwaway Fedora container, throwaway key only inside it): `scripts/test-rpm-container.sh RPMDIR` — install works; tampered package, tampered repomd.xml and unsigned package are refused; then rpmlint.
 
+
+### Nightly (test builds without a tag)
+
+`nightly.yml` (draft, started by a person with `workflow_dispatch`: `repo`, `ref` = branch or main, `package`, `key_ref`) builds ONE repository in CI (no secrets), signs in the environment `apt-signing` (same secrets, nothing new) and uploads the rpm files plus `.rpm.asc` to the rolling pre-release `nightly` of this repository (3 versions per package and architecture, `scripts/nightly-retain.sh`). Version: `<next>~nightly.<UTC stamp>.g<sha7>` (`scripts/nightly-version.sh`; sorts after the last and before the next release). `publish.yml` takes that release into `rpm/nightly` (the channel is off by default at the user). Nothing built locally ever goes in.
 ## Switching on GitHub Pages (owner, once; not done by agents)
 
 Repository `FreeSynergy-Net/Repository` > Settings > Pages > Build and deployment > Source: **GitHub Actions**. Then run the workflow `publish` (Actions > publish > Run workflow) with `deploy` ticked.
