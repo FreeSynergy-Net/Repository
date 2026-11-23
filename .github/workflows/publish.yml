@@ -139,7 +139,7 @@ jobs:
         with:
           name: release-src
           path: rpms/stable
-      - name: Trust anchor freesynergy-release (built without secrets from third-party crates): key = the pinned one, repo file as expected, BEFORE it is signed
+      - name: Trust anchor freesynergy-release, checked BEFORE it is signed (built without secrets from third-party crates; key = the pinned one, repo file as expected)
         run: |
           set -euo pipefail
           sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends rpm cpio gnupg
