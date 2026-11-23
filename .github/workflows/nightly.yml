@@ -1,4 +1,6 @@
 # DRAFT - never run. A person triggers it (workflow_dispatch); nothing runs on push, schedule or tag.
+# Only reviewed code is ever signed with the project key: `ref` is `main` or a full commit SHA that is an ancestor of origin/main of the source repo (scripts/nightly-check-ref.sh,
+# job `check`, first job, no secrets, BEFORE build and sign). Branches and tags are refused.
 # Test build of ONE FreeSynergy repo at a branch or main, WITHOUT a tag: signed rpm files for the dnf channel `nightly` (off by default at the user:
 # /etc/yum.repos.d/freesynergy.repo, [freesynergy-nightly] enabled=0). Version <next>~nightly.<UTC stamp>.g<sha7> (scripts/nightly-version.sh).
 # Three jobs: build (no secrets) -> sign (environment apt-signing, the existing secrets GPG_PRIVATE_KEY / GPG_PASSPHRASE, nothing new) -> upload (no secrets, only contents: write).
@@ -14,7 +16,7 @@ on:
         description: "FreeSynergy-Net repository to build (name fs-<name>), e.g. fs-starter"
         required: true
       ref:
-        description: "Branch or main of that repository (a branch name, no tag; the commit is what counts)"
+        description: "main, or a full commit SHA that is an ancestor of origin/main of that repository (no branch, no tag)"
         default: main
       package:
         description: "Cargo package that carries the binary (-p), e.g. fs-starter-host; empty = the only/first package"
@@ -35,7 +37,40 @@ concurrency:
   group: nightly
   cancel-in-progress: false
 jobs:
+  check:
+    # First job, no secrets: refuses everything that is not on main BEFORE anything is built or signed.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      sha: ${{ steps.ref.outputs.sha }}
+    steps:
+      - name: Check the inputs (they only travel through env, never into a script text)
+        env:
+          REPO: ${{ inputs.repo }}
+          PKG: ${{ inputs.package }}
+          BINS: ${{ inputs.bins }}
+        run: |
+          set -euo pipefail
+          [[ $REPO =~ ^fs-[a-z0-9-]+$ ]] || { echo "::error::bad repo name"; exit 1; }
+          [[ -z $PKG || $PKG =~ ^[a-z0-9_-]+$ ]] || { echo "::error::bad package"; exit 1; }
+          [[ -z $BINS || $BINS =~ ^[a-z0-9_,-]+$ ]] || { echo "::error::bad bins"; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: FreeSynergy-Net/${{ inputs.repo }}
+          ref: main
+          path: src
+          fetch-depth: 0
+          persist-credentials: false
+      - id: ref
+        name: main or an ancestor of main, else stop
+        env:
+          REF: ${{ inputs.ref }}
+        run: echo "sha=$(scripts/nightly-check-ref.sh src "$REF")" >> "$GITHUB_OUTPUT"
   build:
+    needs: check
     name: build ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
@@ -46,25 +81,13 @@ jobs:
           - { arch: x86_64, runner: ubuntu-24.04, triple: x86_64-unknown-linux-gnu }
           - { arch: aarch64, runner: ubuntu-24.04-arm, triple: aarch64-unknown-linux-gnu }
     steps:
-      - name: Check the inputs (they only travel through env, never into a script text)
-        env:
-          REPO: ${{ inputs.repo }}
-          REF: ${{ inputs.ref }}
-          PKG: ${{ inputs.package }}
-          BINS: ${{ inputs.bins }}
-        run: |
-          set -euo pipefail
-          [[ $REPO =~ ^fs-[a-z0-9-]+$ ]] || { echo "::error::bad repo name"; exit 1; }
-          [[ $REF =~ ^[A-Za-z0-9._/-]+$ && $REF != *..* && $REF != refs/tags/* ]] || { echo "::error::ref must be a branch name"; exit 1; }
-          [[ -z $PKG || $PKG =~ ^[a-z0-9_-]+$ ]] || { echo "::error::bad package"; exit 1; }
-          [[ -z $BINS || $BINS =~ ^[a-z0-9_,-]+$ ]] || { echo "::error::bad bins"; exit 1; }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: FreeSynergy-Net/${{ inputs.repo }}
-          ref: ${{ inputs.ref }}
+          ref: ${{ needs.check.outputs.sha }}
           path: src
           fetch-depth: 0
           persist-credentials: false
