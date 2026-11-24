@@ -65,4 +65,8 @@ rp=$(awk '/^  sign:$/ {s=1; next} s && /^  [a-z-]+:$/ {exit} s {print}' "$pw")
 ! grep -E 'cpio ' "$here/check-release-pkg.sh" | grep -v '^#' | grep -qE 'cpio.* -[a-z]*d[a-z]*( |$)' && ok "check-release-pkg.sh never uses cpio -d (no unpack)" || bad "check-release-pkg.sh unpacks"
 grep -qE "^    container: registry.fedoraproject.org/fedora:[0-9]+@sha256:[0-9a-f]{64}\$" <<< "$rc" && ok "release-check runs in a Fedora container pinned by digest" || bad "release-check container missing or not pinned by digest"
 grep -qE "^    container: registry.fedoraproject.org/fedora:[0-9]+@sha256:[0-9a-f]{64}\$" "$here/../.github/workflows/check.yml" && grep -q "NEED_NEW_RPM=1" "$here/../.github/workflows/check.yml" && ok "check.yml has the Fedora job (digest-pinned, NEED_NEW_RPM)" || bad "check.yml lacks the pinned Fedora job"
+# INST-5: freesynergy-filesystem is built next to freesynergy-release, checked in release-check (no secrets), key job only compares its sha256; the pin is a full commit SHA
+{ grep -q "check-filesystem-pkg.sh" <<< "$rc" && ! grep -qE "^    environment:|secrets\." <<< "$rc"; } && ok "release-check runs check-filesystem-pkg.sh, without environment and secrets" || bad "release-check does not check freesynergy-filesystem"
+! grep -q "check-filesystem-pkg.sh" <<< "$rp" && grep -q "needs.release-check.outputs.fs_sha" <<< "$rp" && grep -q "freesynergy-filesystem" <<< "$rp" && ok "key job only compares the sha256 of freesynergy-filesystem" || bad "key job does not compare the sha256 of freesynergy-filesystem"
+grep -q "package filesystem" "$pw" && grep -qE "^  BLUEPRINT_SHA: \"[0-9a-f]{40}\"$" "$pw" && ok "publish.yml builds package filesystem at a full-SHA pin" || bad "publish.yml: no package filesystem or pin not a full SHA"
 exit $fail

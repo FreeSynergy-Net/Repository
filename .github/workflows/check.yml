@@ -48,3 +48,5 @@ jobs:
           persist-credentials: false
       - name: Self-test of the key scripts with a new rpm (mode, owner, flags, dependencies, %preuntrans counter-tests; no skip)
         run: NEED_NEW_RPM=1 scripts/test_verify.sh
+      - name: freesynergy-filesystem check and unowned-dirs gate (good package passes; counter-packages and a folder without owner are red; no skip)
+        run: CI=1 scripts/test_filesystem_pkg.sh
