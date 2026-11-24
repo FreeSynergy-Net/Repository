@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Self-test of check-filesystem-pkg.sh and of the gate unowned-dirs.sh for freesynergy-filesystem (INST-5). Fixtures are built with rpmbuild (no fs-blueprint needed).
 # The good package must pass, each counter package (wrong in exactly one point) must be refused; a folder without an owner must turn the gate RED.
-# shellcheck disable=SC2015
+# shellcheck disable=SC2015,SC2016
 set -uo pipefail
 here=$(cd "$(dirname "$0")" && pwd); w=$(mktemp -d); trap 'rm -rf "$w"' EXIT; t=0; c=$here/check-filesystem-pkg.sh; u=$here/unowned-dirs.sh
 ok() { echo "PASS: $1"; }; bad() { echo "FAIL: $1"; t=1; }
