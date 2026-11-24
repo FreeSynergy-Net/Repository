@@ -97,13 +97,13 @@ jobs:
           path: src
           fetch-depth: 0
           persist-credentials: false
-      - uses: FreeSynergy-Net/fs-release/actions/setup-rust@485f74732ddb90965fafcfa37b6a4f6b473dcc6b
+      - uses: FreeSynergy-Net/fs-release/actions/setup-rust@e0aa772a12b91f8a37846b4efef5f44a963a6c47
         with:
           toolchain: pinned
           targets: ${{ matrix.triple }}
           working-directory: src
           cache-key: nightly-${{ matrix.arch }}
-      - uses: FreeSynergy-Net/fs-release/actions/install-tools@485f74732ddb90965fafcfa37b6a4f6b473dcc6b
+      - uses: FreeSynergy-Net/fs-release/actions/install-tools@e0aa772a12b91f8a37846b4efef5f44a963a6c47
         with:
           tools: cargo-generate-rpm@0.21.1
       - name: Version, build, rpm (the binary comes from this job only)
@@ -172,13 +172,13 @@ jobs:
           pattern: nightly-*
           merge-multiple: true
           path: dist
-      - uses: FreeSynergy-Net/fs-release/actions/sign-files@485f74732ddb90965fafcfa37b6a4f6b473dcc6b
+      - uses: FreeSynergy-Net/fs-release/actions/sign-files@e0aa772a12b91f8a37846b4efef5f44a963a6c47
         with:
           mode: packages
           directory: dist
           private-key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.GPG_PASSPHRASE }}
-      - uses: FreeSynergy-Net/fs-release/actions/sign-files@485f74732ddb90965fafcfa37b6a4f6b473dcc6b
+      - uses: FreeSynergy-Net/fs-release/actions/sign-files@e0aa772a12b91f8a37846b4efef5f44a963a6c47
         with:
           mode: detached
           directory: dist
