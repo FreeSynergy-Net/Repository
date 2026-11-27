@@ -6,6 +6,7 @@
 #   SITE/rpm/freesynergy.repo        ready-made dnf repo file
 #   SITE/index.html                  fingerprint, working-version notice, dnf and apt setup
 # The key file is NOT published as is: it must contain exactly ONE primary key and that must be PRIMARY_FPR; only that key is exported.
+# Note: the links to rpm/RPM-GPG-KEY-freesynergy and rpm/freesynergy-release.noarch.rpm only work after publish.yml copies the signed rpm tree into SITE/rpm (cp -a rpm-tree/rpm/. site/rpm/); make-site.sh alone leaves them dead.
 # Usage: make-site.sh REPO SITE PUBLIC_KEY.asc BASE_URL PRIMARY_FPR     (BASE_URL e.g. https://freesynergy-net.github.io/Repository/apt/)
 set -euo pipefail
 repo=${1:?usage: make-site.sh REPO SITE KEY.asc BASE_URL PRIMARY_FPR}; site=${2:?}; key=${3:?}; base=${4:?}; want=${5:?}
@@ -33,6 +34,7 @@ Components: main
 Signed-By: /etc/apt/keyrings/freesynergy-archive-keyring.pgp
 SRC
 # dnf side: ready-made repo file (same values as the freesynergy-release package, but with the key as a URL so it works without that package)
+[[ $base == */apt/ ]] || { echo "error: BASE_URL must end in apt/ (the rpm side is derived from it)" >&2; exit 2; }
 rpmbase=${base%apt/}rpm/
 mkdir -p "$site/rpm"
 cat > "$site/rpm/freesynergy.repo" <<REPO
@@ -50,8 +52,8 @@ cat > "$site/index.html" <<HTML
 <p><strong>Working version / Arbeitsversion.</strong> These are early pre-releases: they work, but they change often and are not finished. Das sind frühe Vorabversionen: sie laufen, ändern sich aber oft und sind nicht fertig.</p>
 <p>Primary key fingerprint (check it against the project website and the ADR before you trust the key / Fingerabdruck vor dem Vertrauen mit der Projektseite vergleichen): <code>$fpr</code></p>
 <h2>dnf (Fedora)</h2>
-<p>Repo file / Quelldatei: <a href="rpm/freesynergy.repo">freesynergy.repo</a> (to <code>/etc/yum.repos.d/</code>), key / Schlüssel: <a href="rpm/RPM-GPG-KEY-freesynergy">RPM-GPG-KEY-freesynergy</a>. Both signature checks are on (<code>gpgcheck=1</code>, <code>repo_gpgcheck=1</code>). Or install the package / oder das Paket installieren: <a href="rpm/freesynergy-release.noarch.rpm">freesynergy-release.noarch.rpm</a>. Then / dann: <code>dnf install fs-tasks</code>.</p>
+<p>First install, always in this order / Erstinstallation immer in dieser Reihenfolge: (1) get the key / Schlüssel holen: <a href="rpm/RPM-GPG-KEY-freesynergy">RPM-GPG-KEY-freesynergy</a>; (2) compare its fingerprint with the one above / Fingerabdruck mit dem obigen vergleichen; (3) <code>sudo rpm --import RPM-GPG-KEY-freesynergy</code>; (4) <code>sudo dnf install --setopt=localpkg_gpgcheck=1 ${rpmbase}freesynergy-release.noarch.rpm</code> (puts the repo file and the key in place; without that option Fedora does not check the signature of a package given as a URL / ohne diese Option prüft Fedora die Signatur eines Pakets per URL nicht). Then / dann: <code>dnf install &lt;package&gt;</code>, e.g. / z. B. <code>fs-tasks</code> once it is in the channel / sobald es im Kanal ist. Alternatively the plain repo file / oder nur die Quelldatei: <a href="rpm/freesynergy.repo">freesynergy.repo</a> (to <code>/etc/yum.repos.d/</code>; both signature checks on: <code>gpgcheck=1</code>, <code>repo_gpgcheck=1</code>).</p>
 <h2>apt (Debian, Ubuntu)</h2>
-<p>Setup: see docs/en/setup-apt.md (docs/de/einrichtung-apt.md) in the Repository repository. Key: <a href="apt/freesynergy-archive-keyring.asc">asc</a>, <a href="apt/freesynergy-archive-keyring.pgp">pgp</a>; source file / Quelldatei: <a href="apt/freesynergy.sources">freesynergy.sources</a>.</p>
+<p>Setup: see <a href="https://github.com/FreeSynergy-Net/Repository/blob/main/docs/en/setup-apt.md">docs/en/setup-apt.md</a> (<a href="https://github.com/FreeSynergy-Net/Repository/blob/main/docs/de/einrichtung-apt.md">docs/de/einrichtung-apt.md</a>). Key: <a href="apt/freesynergy-archive-keyring.asc">asc</a>, <a href="apt/freesynergy-archive-keyring.pgp">pgp</a>; source file / Quelldatei: <a href="apt/freesynergy.sources">freesynergy.sources</a>.</p>
 HTML
 echo "site assembled in $site (key $fpr)"
