@@ -146,6 +146,8 @@ gpg --batch --armor --export "$FPR1" > "$T/k1.asc"; GNUPGHOME=$G2 gpg --batch --
 n=$(gpg --batch --show-keys --with-colons "$T/site/apt/freesynergy-archive-keyring.pgp" 2> /dev/null | grep -c '^pub:')
 [[ $n == 1 ]] && pass "D: published keyring has exactly one primary key" || fail "D: keyring has $n primary keys"
 grep -q '^Suites: stable' "$T/site/apt/freesynergy.sources" && pass "D: sources file points at stable" || fail "D: sources suite"
+grep -qi "working version" "$T/site/index.html" && grep -qi "arbeitsversion" "$T/site/index.html" && pass "D: index shows the working-version notice (EN+DE)" || fail "D: working-version notice missing"
+grep -q "^baseurl=https://example.org/rpm/stable$" "$T/site/rpm/freesynergy.repo" && grep -q "^repo_gpgcheck=1$" "$T/site/rpm/freesynergy.repo" && grep -q "^gpgkey=https://example.org/rpm/RPM-GPG-KEY-freesynergy$" "$T/site/rpm/freesynergy.repo" && pass "D: freesynergy.repo has the rpm URL and both checks" || fail "D: freesynergy.repo wrong"
 expect_fail "D: key file with a second primary key is refused" "$here/make-site.sh" "$T/synth" "$T/site2" "$T/k12.asc" https://example.org/apt/ "$FPR1"
 expect_fail "D: key file with another key than wanted is refused" "$here/make-site.sh" "$T/synth" "$T/site3" "$T/k2.asc" https://example.org/apt/ "$FPR1"
 [[ ! -e $T/site2/apt/freesynergy-archive-keyring.pgp ]] && pass "D: refused run published nothing" || fail "D: key published despite refusal"
